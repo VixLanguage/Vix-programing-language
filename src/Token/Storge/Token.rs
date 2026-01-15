@@ -1,0 +1,82 @@
+use crate::import::*;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Token {
+    Create, Pub, Func, End, As, Return,
+    If, Else, While, For, Break, Continue, Module,
+    True, False, Extern, From, Mut, Struct, Enum, Any,
+    TripleDot,  
+    Mod, To, BitwiseOr,     
+    BitwiseAnd, 
+    Use,  
+    Match, Case, Default, Unsafe,
+    Then, Do, In, Refrence, Scope, Const,
+    Mutable,
+    Reference, None, Null,
+    Impl, Selfish, Trait, Import,
+    Array,
+    Slots,
+    Lists,
+    Char,
+    Panic,
+    Have,    
+    Get,
+    Filter,
+    IsEmpty,
+    Unwrap,
+    UnwrapOr,
+    IsSome,
+    IsNone,
+    Ok,
+    Err,
+    Not,
+    ReferenceTo,
+    Some,
+    Result,
+    Option,
+    Wait,
+    NullPtr,
+    SizeOf,
+    TypeOf,
+    AlignOf,
+    OffsetOf,
+    OneOf,
+    Caret, Tilde, Type,
+
+    Bool, Void, Str,
+    TypeIdentifier(String),
+    
+    Identifier(String),
+    Number(i32),
+    Float(OrderedFloat<f32>),
+    String(String),
+    HexNumber(u32),
+    BinaryNumber(u32),
+    OctalNumber(u32),
+    
+    LeftParen, RightParen, LeftBrace, RightBrace, LeftBracket, RightBracket,
+    Equals, EqualsEquals, NotEquals,
+    Plus, Minus, Star, Slash, Percent,
+    Less, Greater, LessEquals, GreaterEquals,
+    And, Or,
+    Ampersand, Pipe,
+    
+    Semicolon, Comma, Colon, Arrow, Dot,
+    DoubleColon,
+
+    LeftShift, RightShift,
+    
+    EOF,
+
+    PlusEquals, MinusEquals, StarEquals, SlashEquals, PercentEquals,
+    AmpersandEquals, PipeEquals, CaretEquals,
+    LessLessEquals, GreaterGreaterEquals,
+}
+
+pub struct Lexer {
+    source: String,
+    chars: Vec<char>,
+    pos: usize,
+    pub errors: Vec<LexError>,
+    pub spans: Vec<SourceSpan>,
+}
