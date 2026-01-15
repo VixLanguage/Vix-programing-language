@@ -40,13 +40,12 @@ fn main() {
         return;
     }
 
-    // Handle path command
+    // Handle path command // There is so many coming new commands too!
     if command == "path" {
         match env::current_exe() {
             Ok(exe_path) => {
-                // Get parent directory (remove the executable name)
+                // Get dir parent. Msg for devs: please add simpler comments if you wanna add tho. It's not really that useful.
                 if let Some(parent) = exe_path.parent() {
-                    // Get the parent of bin directory (if in bin/)
                     if parent.file_name().and_then(|n| n.to_str()) == Some("bin") {
                         if let Some(vix_root) = parent.parent() {
                             println!("{}", vix_root.display());
@@ -301,4 +300,5 @@ fn main() {
             std::process::exit(1);
         }
     }
+
 }
