@@ -79,7 +79,7 @@ Vix is highly optimized programing language compiles to C then to LLVM using [Cl
 ```py
     Source Code -> Vix Compiler -> C -> Clang Compiler
 ```
-What makes Xeon so fast and good for high performance applications that it's optimized and memory safe same time use Clang -O3 optimzations, inlineand much more for generate highly optimized IR code and binary.
+What makes vix so fast and good for high performance applications that it's optimized and memory safe same time use Clang -O3 optimzations, inlineand much more for generate highly optimized IR code and binary.
 
 Vix allow importing C/C++ libraries easily that makes you use highly fast languags libraries on Vix it self. And all libraries on Vix highly optimized and easily to install and implement for more help about implemeting a library on Vix we'd recommand you to visit: https:///help/library_installion and can check our marketplace contain so many free libraries: https:///marketplace.
 
