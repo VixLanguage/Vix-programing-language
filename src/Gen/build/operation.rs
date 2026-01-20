@@ -12,7 +12,91 @@ impl Codegen {
         let (l_var, l_ty) = self.codegen_expr(left, body) .check_error();
         let (r_var, r_ty) = self.codegen_expr(right, body) .check_error();
 
- 
+         
+        let left_var = l_var.clone();
+        let right_var = r_var.clone();
+        let left_ty = l_ty.clone();
+        let right_ty = r_ty.clone();
+        
+        if op == "+" && matches!(left_ty, Type::Str { .. }) && matches!(right_ty, Type::Char { .. }) {
+            let char_tmp = self.fresh_var();
+            body.push_str(&format!("char {}[2] = {{ {}, '\\0' }};\n", char_tmp, right_var));
+            body.push_str(&format!("Slice_char {}_str = {{ .ptr = {}, .len = 1 }};\n", char_tmp, char_tmp));
+            
+             
+            let tmp = self.fresh_var();
+            body.push_str(&format!("size_t {}_len = {}.len + 2;\n", tmp, left_var));
+            body.push_str(&format!("char* {}_new = malloc({}_len);\n", tmp, tmp));
+            body.push_str(&format!("memcpy({}_new, {}.ptr, {}.len);\n", tmp, left_var, left_var));
+            body.push_str(&format!("{}_new[{}.len] = {};\n", tmp, left_var, right_var));
+            body.push_str(&format!("{}_new[{}.len + 1] = '\\0';\n", tmp, left_var));
+            
+            let result = self.fresh_var();
+            body.push_str(&format!("Slice_char {} = {{ .ptr = {}_new, .len = {}.len + 1 }};\n", 
+                result, tmp, left_var));
+            
+            return Ok((result, Type::Str { len_type: Box::new(Type::i64()) }));
+        }
+
+
+        if (matches!(l_ty, Type::Str { .. }) || matches!(l_ty, Type::ConstStr)) && op == "+" {
+            let mut l_ptr = l_var.clone();
+            let mut r_ptr = r_var.clone();
+
+            self.ensure_string_typedef();
+            self.ensure_string_concat();
+
+            if matches!(l_ty, Type::ConstStr) {
+                let tmp_l = self.fresh_var();
+                body.push_str(&format!("String {} = vix_string_from_const({});\n", tmp_l, l_ptr));
+                l_ptr = tmp_l;
+            }
+            
+            if matches!(r_ty, Type::ConstStr) {
+                let tmp_r = self.fresh_var();
+                body.push_str(&format!("String {} = vix_string_from_const({});\n", tmp_r, r_ptr));
+                r_ptr = tmp_r;
+            } else if matches!(r_ty, Type::Str { .. }) {
+                 
+            } else {
+                 
+                let tmp_r = self.fresh_var();
+                match r_ty {
+                    Type::Int { .. } => {
+                        body.push_str(&format!("String {} = vix_int_to_str({});\n", tmp_r, r_ptr));
+                    }
+                    _ => {
+                        body.push_str(&format!("String {} = vix_string_from_const(\"{}\");\n", tmp_r, r_ptr));
+                    }
+                }
+                r_ptr = tmp_r;
+            }
+            
+            let res_tmp = self.fresh_var();
+            body.push_str(&format!("String {} = vix_string_concat({}, {});\n", res_tmp, l_ptr, r_ptr));
+            return Ok((res_tmp, Type::Str { len_type: Box::new(Type::i64()) }));
+        }
+
+        if (matches!(l_ty, Type::Str { .. }) || matches!(l_ty, Type::ConstStr)) &&
+        (matches!(r_ty, Type::Str { .. }) || matches!(r_ty, Type::ConstStr)) &&
+        matches!(op, "==" | "!=" | "<" | "<=" | ">" | ">=") {
+            
+            let l_ptr = if matches!(l_ty, Type::Str { .. }) {
+                format!("{}.ptr", l_var)
+            } else {
+                l_var.clone()
+            };
+            
+            let r_ptr = if matches!(r_ty, Type::Str { .. }) {
+                format!("{}.ptr", r_var)
+            } else {
+                r_var.clone()
+            };
+            
+            let result = self.codegen_string_compare(&l_ptr, &r_ptr, op, body);
+            return Ok((result, Type::Bool));
+        }
+
         if matches!(l_ty, Type::Void) {
             self.diagnostics.error(
                 "VoidOperand",
@@ -40,7 +124,6 @@ impl Codegen {
             );
             return Err(());
         }
-
  
         if !self.binop_types_compatible_str(&l_ty, &r_ty, op) {
             let left_loc = left.location();
@@ -86,29 +169,25 @@ impl Codegen {
             return Ok((res_tmp, Type::Str { len_type: Box::new(Type::i64()) }));
         }
 
-        let (c_op, result_ty) = match op {
+       let (c_op, result_ty) = match op {
             "+" => (op, l_ty.clone()),
             "-" => (op, l_ty.clone()),
             "*" => (op, l_ty.clone()),
             "/" => (op, l_ty.clone()),
             "%" => (op, l_ty.clone()),
-
-            "&" => (op, l_ty.clone()),
-            "|" => (op, l_ty.clone()),
-            "^" => (op, l_ty.clone()),
-            "<<" => (op, l_ty.clone()),
-            ">>" => (op, l_ty.clone()),
-
             "==" => ("==", Type::Bool),
             "!=" => ("!=", Type::Bool),
             "<" => ("<", Type::Bool),
             "<=" => ("<=", Type::Bool),
             ">" => (">", Type::Bool),
             ">=" => (">=", Type::Bool),
-
             "&&" => ("&&", Type::Bool),
             "||" => ("||", Type::Bool),
-
+            "&" => (op, l_ty.clone()),
+            "|" => (op, l_ty.clone()),
+            "^" => (op, l_ty.clone()),
+            "<<" => (op, l_ty.clone()),
+            ">>" => (op, l_ty.clone()),
             _ => {
                 self.diagnostics.error(
                     "UnsupportedBinOp",
@@ -124,11 +203,12 @@ impl Codegen {
             }
         };
 
-        let c_type = result_ty.to_c_type(&self.arch);
+        let c_type = result_ty.to_c_type(&self.arch, &mut self.type_registry);
         let tmp = self.fresh_var();
         body.push_str(&format!("{} {} = {} {} {};\n", c_type, tmp, l_var, c_op, r_var));
         Ok((tmp, result_ty))
     }
+
 
     pub fn codegen_unop(&mut self, op: &str, operand: &Expr, body: &mut String, loc: SourceLocation) -> Result<(String, Type), ()> {
         let (var, ty) = self.codegen_expr(operand, body) .check_error();
@@ -145,9 +225,24 @@ impl Codegen {
                     return Err(());
                 }
                 
-                let c_type = ty.to_c_type(&self.arch);
+                let c_type = ty.to_c_type(&self.arch, &mut self.type_registry);
                 body.push_str(&format!("{}* {} = &{};\n", c_type, tmp, var));
-                Ok((tmp, Type::Ptr(Box::new(ty))))
+                Ok((tmp, Type::Ref(Box::new(ty))))
+            }
+            
+            "&mut" => {
+                if matches!(ty, Type::Void) {
+                    self.diagnostics.error(
+                        "VoidAddressOf",
+                        "Cannot take mutable address of void expression",
+                        void_operation_error("mutable address-of (&mut)", loc)
+                    );
+                    return Err(());
+                }
+                
+                let c_type = ty.to_c_type(&self.arch, &mut self.type_registry);
+                body.push_str(&format!("{}* {} = &{};\n", c_type, tmp, var));
+                Ok((tmp, Type::MutRef(Box::new(ty))))
             }
             
             "*" => {
@@ -161,7 +256,7 @@ impl Codegen {
                         return Err(());
                     }
                     
-                    let c_type = inner.to_c_type(&self.arch);
+                    let c_type = inner.to_c_type(&self.arch, &mut self.type_registry);
                     body.push_str(&format!("{} {} = *{};\n", c_type, tmp, var));
                     Ok((tmp, *inner))
                 } else {
@@ -199,7 +294,7 @@ impl Codegen {
                     return Err(());
                 }
                 
-                let c_type = ty.to_c_type(&self.arch);
+                let c_type = ty.to_c_type(&self.arch, &mut self.type_registry);
                 body.push_str(&format!("{} {} = {}{};\n", c_type, tmp, op, var));
                 Ok((tmp, ty))
             }
@@ -217,7 +312,7 @@ impl Codegen {
                     "VoidVariable",
                     &format!("Variable '{}' cannot have void type", name),
                     void_variable_error(name, loc)
-                );
+                );  
                 return Err(());
             }
             
@@ -231,7 +326,7 @@ impl Codegen {
                     return Err(());
                 }
                 
-                let elem_c_type = element.to_c_type(&self.arch);
+                let elem_c_type = element.to_c_type(&self.arch, &mut self.type_registry);
                 
                 body.push_str(&format!("{} {}[{}];\n", elem_c_type, c_name, size));
                 body.push_str(&format!("memcpy({}, {}, sizeof({}));\n", c_name, val_var, c_name));
@@ -247,7 +342,7 @@ impl Codegen {
                     return Err(());
                 }
                 
-                let elem_c_type = element.to_c_type(&self.arch);
+                let elem_c_type = element.to_c_type(&self.arch, &mut self.type_registry);
                 body.push_str(&format!("struct {{ {}* ptr; size_t len; }} {} = {};\n", elem_c_type, c_name, val_var));
             }
             
@@ -261,7 +356,7 @@ impl Codegen {
                     return Err(());
                 }
                 
-                let elem_c_type = element.to_c_type(&self.arch);
+                let elem_c_type = element.to_c_type(&self.arch, &mut self.type_registry);
                 let dims_str = dimensions.iter()
                     .map(|d| format!("[{}]", d))
                     .collect::<String>();
@@ -290,7 +385,7 @@ impl Codegen {
                     }
                 }
                 
-                let c_type = ty.to_c_type(&self.arch);
+                let c_type = ty.to_c_type(&self.arch, &mut self.type_registry);
                 body.push_str(&format!("{} {} = {};\n", c_type, c_name, val_var));
             }
             
@@ -314,13 +409,13 @@ impl Codegen {
                     }
                 }
                 
-                let c_type = ty.to_c_type(&self.arch);
+                let c_type = ty.to_c_type(&self.arch, &mut self.type_registry);
                 body.push_str(&format!("{} {} = {};\n", c_type, c_name, val_var));
             }
             
             Type::Ptr(inner) if matches!(**inner, Type::Void) => {
  
-                let c_type = ty.to_c_type(&self.arch);
+                let c_type = ty.to_c_type(&self.arch, &mut self.type_registry);
                 body.push_str(&format!("{} {} = {};\n", c_type, c_name, val_var));
             }
             
@@ -343,7 +438,7 @@ impl Codegen {
                     return Err(());
                 }
                 
-                let c_type = ty.to_c_type(&self.arch);
+                let c_type = ty.to_c_type(&self.arch, &mut self.type_registry);
                 match (ty, &val_ty) {
                     (Type::ConstStr, Type::Str { .. }) => {
                         body.push_str(&format!("{} {} = {}.ptr;\n", c_type, c_name, val_var));
@@ -362,26 +457,7 @@ impl Codegen {
         Ok(())
     }
 
-    pub fn codegen_tuple_unpack(&mut self, names: &[String], value: &Expr, body: &mut String, _loc: SourceLocation) -> Result<(), ()> {
-        let (val_var, val_ty) = self.codegen_expr(value, body) .check_error();
-        
-        match val_ty {
-            Type::Tuple { fields } => {
-                if names.len() > fields.len() {
-                    return Err(());
-                }
-                
-                for (i, name) in names.iter().enumerate() {
-                    let field_ty = &fields[i];
-                    let c_name = format!("var_{}", name);
-                    body.push_str(&format!("{} {} = {}.field_{};\n", field_ty.to_c_type(&self.arch), c_name, val_var, i));
-                    self.vars.insert(name.clone(), (c_name, field_ty.clone()));
-                }
-                Ok(())
-            }
-            _ => Err(())
-        }
-    }
+
 
     fn binop_types_compatible(&self, left: &Type, right: &Type, op: &str) -> bool {
         match op {
@@ -421,14 +497,13 @@ impl Codegen {
     fn binop_types_compatible_str(&self, left: &Type, right: &Type, op: &str) -> bool {
         match op {
             "+" | "-" | "*" | "/" | "%" => {
-                matches!((left, right),
-                    (Type::Int { .. }, Type::Int { .. }) |
-                    (Type::Float { .. }, Type::Float { .. }) |
-                    (Type::Str { .. }, Type::Str { .. }) |
-                    (Type::Str { .. }, Type::ConstStr) |
-                    (Type::ConstStr, Type::Str { .. }) |
-                    (Type::ConstStr, Type::ConstStr)
-                ) && (op != "+" || matches!(left, Type::Str { .. } | Type::ConstStr))
+                if matches!((left, right), (Type::Int { .. }, Type::Int { .. }) | (Type::Float { .. }, Type::Float { .. })) {
+                    true
+                } else if op == "+" && (matches!(left, Type::Str { .. } | Type::ConstStr) || matches!(right, Type::Str { .. } | Type::ConstStr)) {
+                    true
+                } else {
+                    false
+                }
             }
 
  
@@ -458,5 +533,28 @@ impl Codegen {
 
             _ => false,
         }
+    }
+
+    pub fn codegen_union_value(&mut self, value: &Expr, expected_ty: &Type, body: &mut String) -> Result<(String, Type), ()> {
+        let (val_var, val_ty) = self.codegen_expr(value, body)?;
+        
+        if let Type::Union { variants } = expected_ty {
+            for (idx, variant) in variants.iter().enumerate() {
+                if self.types_compatible(variant, &val_ty) {
+                    let tmp = self.fresh_var();
+                    let union_type_name = self.type_registry.get_union_type_name(variants, &self.arch);
+                    
+                    body.push_str(&format!("{} {};\n", union_type_name, tmp));
+                    body.push_str(&format!("{}.tag = {};\n", tmp, idx));
+                    
+                    let field_name = format!("variant_{}", idx);
+                    body.push_str(&format!("{}.data.{} = {};\n", tmp, field_name, val_var));
+                    
+                    return Ok((tmp, expected_ty.clone()));
+                }
+            }
+        }
+        
+        Ok((val_var, val_ty))
     }
 }

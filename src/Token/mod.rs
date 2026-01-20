@@ -1,5 +1,5 @@
 pub mod parser;
-pub mod Storge;
-pub mod Lexer;
+pub mod storge;
+pub mod lexer;
 pub mod functions;
-pub mod Helper;
+pub mod helper;

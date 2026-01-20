@@ -3,7 +3,7 @@ use crate::import::*;
 impl Codegen {
     pub fn codegen_std_call(&mut self, func: &str, args: &[Expr], body: &mut String, loc: SourceLocation) -> Result<(String, Type), ()> {
         self.ensure_runtime_functions();
-        println!("[DEBUG] codegen_std_call: func_name={}", func);
+        eprintln!("[DEBUG] codegen_std_call: func_name={}", func);
         match func {
             "array" | "Array" => self.codegen_array_init(args, body),
             "vector" | "Vector" => self.codegen_vector_init(args, body),
@@ -86,19 +86,19 @@ int x_random(int max) {
     fn codegen_call_expr_default(&mut self, func: &str, args: &[Expr], body: &mut String, _loc: SourceLocation) -> Result<(String, Type), ()> {
         let mut arg_vars = Vec::new();
 
-         
-        let param_types = if let Some(ext_info) = self.extern_functions.get(func) {
-            Some(ext_info.params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>())
-        } else if let Some((params, _)) = self.user_functions.get(func) {
-            Some(params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>())
+        println!("[DEBUG] codegen_call_expr_default: func={}, user_functions keys={:?}", func, self.user_functions.keys().collect::<Vec<_>>());
+
+        let (param_types, ret_ty) = if let Some(ext_info) = self.extern_functions.get(func) {
+            (Some(ext_info.params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>()), ext_info.return_type.clone())
+        } else if let Some((params, ret_ty)) = self.user_functions.get(func) {
+            (Some(params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>()), ret_ty.clone())
         } else {
-            None
+            (None, Type::i32())
         };
 
         for (i, arg) in args.iter().enumerate() {
             let (mut var, ty) = self.codegen_expr(arg, body).check_error();
 
-             
             if let Some(params) = &param_types {
                 if let Some(param_ty) = params.get(i) {
                     if matches!(param_ty, Type::ConstStr) && matches!(ty, Type::Str { .. }) {
@@ -112,7 +112,8 @@ int x_random(int max) {
 
         let tmp = self.fresh_var();
         let args_str = arg_vars.join(", ");
-        body.push_str(&format!("int32_t {} = {}({});\n", tmp, func, args_str));
-        Ok((tmp, Type::i32()))
+        let c_ret_type = ret_ty.to_c_type(&self.arch, &mut self.type_registry);
+        body.push_str(&format!("{} {} = {}({});\n", c_ret_type, tmp, func, args_str));
+        Ok((tmp, ret_ty))
     }
 }

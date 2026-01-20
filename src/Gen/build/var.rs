@@ -7,8 +7,9 @@ impl Codegen {
 
         varaable
     }
-
+    
     pub fn codegen_var(&mut self, name: &str, loc: SourceLocation) -> Result<(String, Type), ()> {
+        println!("[DEBUG] codegen_var: looking up '{}', vars keys={:?}", name, self.vars.keys().collect::<Vec<_>>());
         if let Some((c_name, ty)) = self.vars.get(name) {
             return Ok((c_name.clone(), ty.clone()));
         }
@@ -17,6 +18,29 @@ impl Codegen {
             if var_name == name {
                 return Ok((c_name.clone(), ty.clone()));
             }
+        }
+        
+        println!("[DEBUG] codegen_var: '{}' NOT FOUND", name);
+        
+        
+        if self.structs.contains_key(name) {
+            
+            
+            self.diagnostics.error(
+                "InvalidStructReference",
+                &format!("Cannot use struct name '{}' as a value. Use '{}()' to create an instance.", name, name),
+                ErrorContext {
+                    primary_location: loc.clone(),
+                    secondary_locations: vec![],
+                    help_message: Some(format!("Try using '{}()' or '{}::new()' instead", name, name)),
+                    suggestions: vec![
+                        format!("Replace '{}' with '{}()'", name, name),
+                        format!("Use explicit constructor: '{}::new()'", name),
+                    ],
+                }
+            );
+            
+            return Err(());
         }
         
         self.diagnostics.error(
@@ -40,7 +64,7 @@ impl Codegen {
         Err(())
     }
 
-    
+
     pub fn codegen_break(&self, body: &mut String) -> Result<(), ()> {
         body.push_str("break;\n");
         Ok(())
@@ -63,7 +87,7 @@ impl Codegen {
             body.push_str(&format!("if ({} == {}) {{\n", match_var, case_val));
 
             for stmt in &case.body {
-                self.codegen_stmt(stmt, body) ;
+                self.codegen_stmt(stmt, body).ok();
             }
 
             body.push_str(&format!("goto {};\n}}\n", end_label));
@@ -71,7 +95,7 @@ impl Codegen {
 
         if let Some(default_body) = default {
             for stmt in default_body {
-                self.codegen_stmt(stmt, body);
+                self.codegen_stmt(stmt, body).ok();
             }
         }
 

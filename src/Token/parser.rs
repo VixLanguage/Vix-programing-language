@@ -1,6 +1,5 @@
 use crate::import::*;
 
-
 #[derive(Debug, Clone)]
 pub struct ImportContext {
     pub library_imports: HashSet<String>,
@@ -48,9 +47,11 @@ impl Parser {
                      
                     context.library_imports.insert(name.clone());
                 }
-                ImportDecl::FileImport { name, from } => {
-                     
+                ImportDecl::FileImport { name, from } => {    
                     context.symbol_imports.insert(name.clone(), from.clone());
+                }
+                ImportDecl::WildcardImport { from: _ } => {
+                     
                 }
             }
         }
@@ -158,27 +159,35 @@ impl Parser {
             }
             Token::LeftBracket => {
                 self.advance();
-                if self.current() == Token::RightBracket {
-                    self.advance();
-                    return Type::Array {
-                        element: Box::new(Type::Union {
-                            variants: vec![
-                                Type::i32(),
-                                Type::f32(),
-                                Type::Str { len_type: Box::new(Type::i64()) },
-                                Type::Bool,
-                            ],
-                        }),
-                        size: None,
-                    };
+
+                if matches!(self.current(), Token::RightBracket | Token::EOF) {
+                    self.expect(Token::RightBracket, vec![Token::Semicolon, Token::End]);
+                    return Type::Array { element: Box::new(Type::Void), size: None };
                 }
+                
+                 
                 let elem_type = self.parse_type();
-                self.expect(Token::RightBracket, vec![Token::Comma]);
+
+                if self.current() == Token::Semicolon {
+                     
+                    self.advance();
+                    if let Token::Number(size) = self.current() {
+                        self.advance();
+                        self.expect(Token::RightBracket, vec![Token::Semicolon, Token::End]);
+                        return Type::Array {
+                            element: Box::new(elem_type),
+                            size: Some(size as usize),
+                        };
+                    }
+                }
+                
+                self.expect(Token::RightBracket, vec![Token::Semicolon, Token::End]);
                 Type::Array {
                     element: Box::new(elem_type),
                     size: None,
                 }
             }
+
             Token::Option => {
                 self.advance();
                 
@@ -282,6 +291,8 @@ impl Parser {
             }
             Token::Bool => { self.advance(); Type::Bool }
             Token::Void => { self.advance(); Type::Void }
+            Token::StdStr => { self.advance(); Type::StdStr }
+
             Token::Str => {
                 self.advance();
                 
@@ -298,6 +309,7 @@ impl Parser {
                     }
                 }
             }
+            
             Token::BitwiseAnd => {
                 self.advance();
 
@@ -408,6 +420,191 @@ impl Parser {
     fn parse_primary(&mut self) -> Expr {
         let current = self.current();
         let expr = match current {
+             Token::Plan => {
+                self.advance();
+                self.expect(Token::LeftParen, vec![Token::RightParen]);
+                
+                let format_str = if let Token::String(s) = self.current() {
+                    let string = s.clone();
+                    self.advance();
+                    string
+                } else {
+                    String::new()
+                };
+                
+                let mut args = Vec::new();
+                if self.current() == Token::Comma {
+                    self.advance();
+                    while !matches!(self.current(), Token::RightParen | Token::EOF) {
+                        args.push(self.parse_expr());
+                        if self.current() == Token::Comma {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                
+                self.expect(Token::RightParen, vec![Token::Semicolon, Token::End]);
+                Expr::Plan(format_str, args)
+            }
+
+            Token::String(s) => {
+                let string_val = s.clone();
+                self.advance();
+                
+                 
+                if self.current() == Token::Dot {
+                    self.advance();
+                    
+                    if let Token::Identifier(method_name) = self.current() {
+                        let method = method_name.clone();
+                        self.advance();
+                        
+                        if self.current() == Token::LeftParen {
+                            self.advance();
+                            
+                             
+                            let mut args = vec![Expr::String(string_val)];
+                            
+                            while !matches!(self.current(), Token::RightParen | Token::EOF) {
+                                args.push(self.parse_expr());
+                                if self.current() == Token::Comma {
+                                    self.advance();
+                                }
+                            }
+                            self.expect(Token::RightParen, vec![Token::Semicolon]);
+                            return Expr::Call(method, args);
+                        } else {
+                             
+                            return Expr::Call(method, vec![Expr::String(string_val)]);
+                        }
+                    }
+                }
+                
+                Expr::String(string_val)
+            }
+            
+
+            Token::Identifier(name) => {
+    let var_name = name.clone();
+    self.advance();
+    
+    if self.current() == Token::Dot {
+        self.advance();
+        
+        if let Token::Identifier(next_name) = self.current() {
+            let method_or_field = next_name.clone();
+            self.advance();
+            
+            if self.current() == Token::LeftParen {
+                self.advance();
+                
+                let mut args = Vec::new();
+                while !matches!(self.current(), Token::RightParen | Token::EOF) {
+                    args.push(self.parse_expr());
+                    if self.current() == Token::Comma {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                
+                self.expect(Token::RightParen, vec![Token::Semicolon, Token::End]);
+                
+                if var_name.chars().next().unwrap().is_uppercase() {
+                    return Expr::StaticMethodCall(var_name, method_or_field, args);
+                } else {
+                    return Expr::MethodCall(
+                        Box::new(Expr::Var(var_name)),
+                        method_or_field,
+                        args
+                    );
+                }
+            } else {
+                return Expr::MemberAccess(Box::new(Expr::Var(var_name)), method_or_field);
+            }
+        }
+    } else if self.current() == Token::LeftParen {
+        self.advance();
+        
+        if matches!(self.current(), Token::Identifier(_)) && self.peek(1) == Token::Equals {
+            let mut named_args = Vec::new();
+            while !matches!(self.current(), Token::RightParen | Token::EOF) {
+                if let Token::Identifier(arg_name) = self.current() {
+                    self.advance();
+                    self.expect(Token::Equals, vec![Token::Comma, Token::RightParen]);
+                    let arg_expr = self.parse_expr();
+                    named_args.push((arg_name, arg_expr));
+                    if self.current() == Token::Comma {
+                        self.advance();
+                    }
+                }
+            }
+            self.expect(Token::RightParen, vec![Token::Semicolon, Token::End]);
+            return Expr::CallNamed(var_name, named_args);
+        }
+        
+        let mut args = Vec::new();
+        while !matches!(self.current(), Token::RightParen | Token::EOF) {
+            args.push(self.parse_expr());
+            if self.current() == Token::Comma {
+                self.advance();
+            }
+        }
+        self.expect(Token::RightParen, vec![Token::Semicolon, Token::End]);
+        
+        return Expr::Call(var_name, args);
+    }
+
+    if var_name.chars().next().unwrap().is_uppercase() {
+        return Expr::Call(var_name, vec![]);
+    }
+    Expr::Var(var_name)
+}
+
+
+            Token::Selfish => {
+                self.advance();
+                
+                if self.current() == Token::Dot {
+                    self.advance();
+                    if let Token::Identifier(method_name) = self.current() {
+                        let method = method_name.clone();
+                        self.advance();
+                        
+                        if self.current() == Token::LeftParen {
+                            self.advance();
+                            let mut args = vec![Expr::Var("self".to_string())];
+                            
+                            while !matches!(self.current(), Token::RightParen | Token::EOF) {
+                                args.push(self.parse_expr());
+                                if self.current() == Token::Comma {
+                                    self.advance();
+                                }
+                            }
+                            self.expect(Token::RightParen, vec![Token::Semicolon, Token::End]);
+                            return Expr::MethodCall(Box::new(Expr::Var("self".to_string())), method, args[1..].to_vec());
+                        } else {
+                            return Expr::MemberAccess(Box::new(Expr::Var("self".to_string())), method);
+                        }
+                    }
+                } else if self.current() == Token::LeftParen {
+                    self.advance();
+                    let mut args = Vec::new();
+                    while !matches!(self.current(), Token::RightParen | Token::EOF) {
+                        args.push(self.parse_expr());
+                        if self.current() == Token::Comma {
+                            self.advance();
+                        }
+                    }
+                    self.expect(Token::RightParen, vec![Token::Semicolon, Token::End]);
+                    return Expr::Call("self".to_string(), args);
+                }
+                
+                Expr::Var("self".to_string())
+            }
+
             Token::OneOf => {
                 self.advance();
                 self.expect(Token::LeftParen, vec![Token::RightParen]);
@@ -459,82 +656,13 @@ impl Parser {
                 self.expect(Token::RightParen, vec![Token::Semicolon]);
                 Expr::TypeOf(Box::new(expr))
             }
-            Token::Selfish | Token::Identifier(_) => {
-                let var_name = match self.current() {
-                    Token::Selfish => "self".to_string(),
-                    Token::Identifier(ref name) => name.clone(),
-                    _ => unreachable!(),
-                };
-                self.advance();
-                
-                if self.current() == Token::Dot {
-                    self.advance();
-                    if let Token::Identifier(member) = self.current() {
-                        let method_name = member.clone();
-                        self.advance();
-                        
-                        if self.current() == Token::LeftParen {
-                            self.advance();
-                            let mut args = Vec::new();
-                            while !matches!(self.current(), Token::RightParen | Token::EOF) {
-                                args.push(self.parse_expr());
-                                if self.current() == Token::Comma {
-                                    self.advance();
-                                }
-                            }
-                            self.expect(Token::RightParen, vec![Token::Semicolon, Token::End]);
-                            
-                            Expr::MethodCall(Box::new(Expr::Var(var_name)), method_name, args)
-                        } else {
-                            let obj = Expr::Var(var_name);
-                            Expr::MemberAccess(Box::new(obj), member)
-                        }
-                    } else {
-                        self.advance();
-                        Expr::ModuleAccess(var_name, "error".to_string())
-                    }
-                } else if self.current() == Token::LeftParen {
-                    self.advance();
-                    if matches!(self.current(), Token::Identifier(_)) && self.peek(1) == Token::Equals {
-                        let mut named_args = Vec::new();
-                        while !matches!(self.current(), Token::RightParen | Token::EOF) {
-                            if let Token::Identifier(arg_name) = self.current() {
-                                self.advance();
-                                self.expect(Token::Equals, vec![Token::Comma, Token::RightParen]);
-                                let arg_expr = self.parse_expr();
-                                named_args.push((arg_name, arg_expr));
-                                if self.current() == Token::Comma {
-                                    self.advance();
-                                }
-                            } else {
-                                self.advance();
-                                break;
-                            }
-                        }
-                        self.expect(Token::RightParen, vec![Token::Semicolon, Token::End]);
-                        Expr::CallNamed(var_name, named_args)
-                    } else {
-                        let mut args = Vec::new();
-                        while !matches!(self.current(), Token::RightParen | Token::EOF) {
-                            args.push(self.parse_expr());
-                            if self.current() == Token::Comma {
-                                self.advance();
-                            }
-                        }
-                        self.expect(Token::RightParen, vec![Token::Semicolon, Token::End]);
-                        Expr::Call(var_name, args)
-                    }
-                } else {
-                    Expr::Var(var_name)
-                }
-            }
             Token::None => {self.advance();Expr::None}
             Token::Number(n) => { self.advance(); Expr::Number(n) }
+            Token::Char(ch) => {  self.advance(); Expr::Char(ch) }
             Token::Float(f) => { self.advance(); Expr::Float(f.into_inner() as f32) }
             Token::HexNumber(n) => { self.advance(); Expr::HexNumber(n as i32) }
             Token::BinaryNumber(n) => { self.advance(); Expr::BinaryNumber(n as i32) }
             Token::OctalNumber(n) => { self.advance(); Expr::OctalNumber(n as i32) }
-            Token::String(s) => { self.advance(); Expr::String(s) }
             Token::True => { self.advance(); Expr::Bool(true) }
             Token::False => { self.advance(); Expr::Bool(false) }
             Token::Some => {
@@ -544,6 +672,7 @@ impl Parser {
                 self.expect(Token::RightParen, vec![Token::Semicolon]);
                 Expr::Some(Box::new(value))
             }
+            
             Token::Ok => {
                 self.advance();
                 self.expect(Token::LeftParen, vec![Token::RightParen]);
@@ -594,11 +723,107 @@ impl Parser {
                 Expr::Array(elements)
             }
 
+            Token::LeftBrace => {
+                self.advance();
+                let mut entries = Vec::new();
+                
+                while !matches!(self.current(), Token::RightBrace | Token::EOF) {
+                    self.expect(Token::LeftBracket, vec![Token::RightBracket]);
+                    let key = self.parse_expr();
+                    self.expect(Token::RightBracket, vec![Token::Equals]);
+                    self.expect(Token::Equals, vec![Token::Comma, Token::RightBrace]);
+                    let value = self.parse_expr();
+                    
+                    entries.push((key, value));
+                    
+                    if self.current() == Token::Comma {
+                        self.advance();
+                    }
+                }
+                
+                self.expect(Token::RightBrace, vec![Token::Semicolon]);
+                Expr::HashMap(entries)
+            }
+
             _ => {
                 self.advance();
                 Expr::Number(0)
             }
         };
+        expr
+    }
+
+    fn parse_post(&mut self, mut expr: Expr) -> Expr {
+        loop {
+            match self.current() {
+                                 
+                Token::Dot => {
+                    self.advance();
+                    
+                    if let Token::Identifier(method_name) = self.current() {
+                        let method = method_name.clone();
+                        self.advance();
+                        
+                        if self.current() == Token::LeftParen {
+                            self.advance();
+                            
+                            let mut args = Vec::new();
+                            while !matches!(self.current(), Token::RightParen | Token::EOF) {
+                                args.push(self.parse_expr());
+                                if self.current() == Token::Comma {
+                                    self.advance();
+                                }
+                            }
+                            
+                            self.expect(Token::RightParen, vec![Token::Semicolon, Token::End]);
+                            
+                             
+                            expr = Expr::MethodCall(Box::new(expr), method, args);
+                        } else {
+                             
+                            expr = Expr::MemberAccess(Box::new(expr), method);
+                        }
+                    }
+                }
+
+                Token::LeftBrace => {
+                    self.advance();
+                    let mut entries = Vec::new();
+                    
+                    while !matches!(self.current(), Token::RightBrace | Token::EOF) {
+                        self.expect(Token::LeftBracket, vec![Token::RightBracket]);
+                        let key = self.parse_expr();
+                        self.expect(Token::RightBracket, vec![Token::Equals]);
+                        self.expect(Token::Equals, vec![Token::Comma, Token::RightBrace]);
+                        let value = self.parse_expr();
+                        
+                        entries.push((key, value));
+                        
+                        if self.current() == Token::Comma {
+                            self.advance();
+                        }
+                    }
+                    
+                    self.expect(Token::RightBrace, vec![Token::Semicolon]);
+                    expr = Expr::HashMap(entries);
+                }
+                Token::LeftBracket => {
+                    self.advance();
+                    let start = self.parse_expr();
+                    
+                    if self.current() == Token::DoubleDot {
+                        self.advance();
+                        let end = self.parse_expr();
+                        self.expect(Token::RightBracket, vec![Token::Dot, Token::LeftBracket]);
+                        expr = Expr::Slice(Box::new(expr), Box::new(start), Box::new(end));
+                    } else {
+                        self.expect(Token::RightBracket, vec![Token::Dot, Token::LeftBracket]);
+                        expr = Expr::Index(Box::new(expr), vec![start]);
+                    }
+                }
+                _ => break,
+            }
+        }
         expr
     }
 
@@ -633,7 +858,10 @@ impl Parser {
                 let expr = self.parse_unary();
                 Expr::UnOp(op, Box::new(expr))
             }
-            _ => self.parse_primary()
+            _ => {
+                let primary = self.parse_primary();
+                self.parse_post(primary)
+            }
         }
     }
 
@@ -643,7 +871,7 @@ impl Parser {
             Token::Str | Token::Ampersand| Token::BitwiseAnd | Token::TripleDot |
             Token::Tilde | Token::Mut | Token::LeftParen | Token::LeftBracket |
             Token::Identifier(_) | Token::Option | Token::Result | Token::Selfish |
-            Token::Trait | Token::Caret
+            Token::Trait | Token::Caret | Token::StdStr
         )
     }
 
@@ -793,6 +1021,40 @@ impl Parser {
 
     fn parse_stmt(&mut self) -> Stmt {
         match self.current() {
+            Token::Let => {
+                self.advance();
+                
+                let name = if let Token::Identifier(n) = self.current() {
+                    n
+                } else {
+                    panic!("Expected identifier after 'let'");
+                };
+                self.advance();
+
+                let is_mutable = if self.current() == Token::Mut {
+                    self.advance();
+                    true
+                } else {
+                    false
+                };
+
+                let ty = if self.current() == Token::Colon {
+                    self.advance();
+                    self.parse_type()
+                } else {
+                    Type::Auto
+                };
+
+                self.expect(Token::Equals, vec![Token::Semicolon]);
+                let value = self.parse_expr();
+
+                Stmt::TypedDeclaration {
+                    name,
+                    ty,
+                    value,
+                    is_mutable,
+                }
+            }
         Token::Identifier(name) if self.peek(1) == Token::Colon => {
                 let var_name = name.clone();
                 self.advance();
@@ -802,7 +1064,7 @@ impl Parser {
                 self.expect(Token::Equals, vec![Token::Semicolon]);
                 
                 let value_expr = self.parse_expr();
-                
+
                 Stmt::TypedDeclaration {
                     name: var_name,
                     ty: var_type,
@@ -823,7 +1085,7 @@ impl Parser {
                         self.advance();
                     }
                 }
-               
+
                 if self.current() == Token::End {
                     self.advance();
                 }
@@ -848,28 +1110,48 @@ impl Parser {
                
                 Stmt::Scope(body)
             }
-            
+
             Token::Create => {
                 self.advance();
-                self.expect(Token::Equals, vec![Token::Semicolon, Token::End]);
-                let _expr = self.parse_expr();
-                if let Token::Identifier(name) = self.current() {
+                
+                if let Token::Identifier(first_name) = self.current() {
                     self.advance();
-                    self.expect(Token::Equals, vec![Token::Semicolon, Token::End]);
-                    let expr = self.parse_expr();
-                   
-                    let ty = if self.current() == Token::As {
-                        self.advance();
-                        self.parse_type()
+                    
+                    if self.current() == Token::Comma {
+                        let mut names = vec![first_name];
+                        while self.current() == Token::Comma {
+                            self.advance();
+                            if let Token::Identifier(name) = self.current() {
+                                names.push(name);
+                                self.advance();
+                            }
+                        }
+                        
+                        self.expect(Token::Equals, vec![Token::Semicolon]);
+                        let value = self.parse_expr();
+                        
+                        Stmt::TupleUnpack {
+                            names,
+                            value,
+                        }
                     } else {
-                        Parser::infer_type(&expr)
-                    };
-                   
-                    Stmt::TypedDeclaration {
-                        name,
-                        ty,
-                        value: expr,
-                        is_mutable: false,
+                        let name = first_name;
+                        self.expect(Token::Equals, vec![Token::Semicolon]);
+                        let value = self.parse_expr();
+                        
+                        let ty = if self.current() == Token::As {
+                            self.advance();
+                            self.parse_type()
+                        } else {
+                            Parser::infer_type(&value)
+                        };
+                        
+                        Stmt::TypedDeclaration {
+                            name,
+                            ty,
+                            value,
+                            is_mutable: false,
+                        }
                     }
                 } else {
                     self.advance();
@@ -912,7 +1194,7 @@ impl Parser {
                                 self.advance();
                             }
                         }
-                       
+
                         cases.push(MatchCase {
                             value: case_value,
                             body: case_stmts,
@@ -945,45 +1227,91 @@ impl Parser {
             }
             Token::If => {
                 self.advance();
-                let mut then_body = Vec::new();
-                let mut stmts = Vec::new();
-
-                let cond = self.parse_expr();
-                let else_body = if self.current() == Token::Else {
+                let expr = self.parse_expr();
+                
+                if self.current() == Token::Equals {
                     self.advance();
-                    self.expect(Token::Colon, vec![Token::End]);
+                    let value = self.parse_expr();
                     
-                    while !matches!(self.current(), Token::End | Token::EOF) {
-                        stmts.push(self.parse_stmt());
+                    if self.current() == Token::Then {
+                        self.advance();
+                    }
+                    
+                    let mut then_body = Vec::new();
+                    while !matches!(self.current(), Token::Else | Token::End | Token::EOF) {
+                        then_body.push(self.parse_stmt());
+                        if self.current() == Token::Semicolon {
+                             self.advance();
+                        }
+                    }
+                    
+                    let else_body = if self.current() == Token::Else {
+                        self.advance();
+                        self.expect(Token::Colon, vec![Token::End]);
+                        let mut stmts = Vec::new();
+                        while !matches!(self.current(), Token::End | Token::EOF) {
+                            stmts.push(self.parse_stmt());
+                            if self.current() == Token::Semicolon {
+                                self.advance();
+                            }
+                        }
+                        Some(stmts)
+                    } else {
+                        None
+                    };
+                    
+                    if self.current() == Token::End {
+                         self.advance();
+                    } else if self.current() == Token::Comma {
+                         self.advance();
+                    }
+                    
+                    Stmt::IfLet {
+                        pattern: expr,
+                        value,
+                        then_block: then_body,
+                        else_block: else_body
+                    }
+                } else {
+                    let mut then_body = Vec::new();
+                    let mut stmts = Vec::new();
+    
+                    let cond = expr;
+                    let else_body = if self.current() == Token::Else {
+                        self.advance();
+                        self.expect(Token::Colon, vec![Token::End]);
+                        
+                        while !matches!(self.current(), Token::End | Token::EOF) {
+                            stmts.push(self.parse_stmt());
+                            if self.current() == Token::Semicolon {
+                                self.advance();
+                            }
+                        }
+                        Some(stmts)
+                    } else {
+                        None
+                    };
+                   
+                    if self.current() == Token::Then {
+                        self.advance()
+                    }
+    
+                    while !matches!(self.current(), Token::Else | Token::End | Token::EOF) {
+                        then_body.push(self.parse_stmt());
+    
                         if self.current() == Token::Semicolon {
                             self.advance();
                         }
                     }
-                    Some(stmts)
-                } else {
-                    None
-                };
-               
-                
-                if self.current() == Token::Then {
-                    self.advance()
-                }
-
-                while !matches!(self.current(), Token::Else | Token::End | Token::EOF) {
-                    then_body.push(self.parse_stmt());
-
-                    if self.current() == Token::Semicolon {
+    
+                    if self.current() == Token::End {
+                        self.advance();
+                    } else if self.current() == Token::Comma {
                         self.advance();
                     }
+    
+                    Stmt::If(cond, then_body, else_body)
                 }
-
-                    if self.current() == Token::End {
-                            self.advance();
-                        } else if self.current() == Token::Comma {
-                            self.advance();
-                    }
-
-                Stmt::If(cond, then_body, else_body)
             }
 
             Token::While => {
@@ -1041,6 +1369,18 @@ impl Parser {
                 }
                 Stmt::For(var_name, iter_expr, body)
             }
+            Token::Mod => self.parse_module(false),
+            Token::Func => Stmt::Function(self.parse_function_with_visibility(false, false)),
+            Token::Pub => {
+                self.advance();
+                match self.current() {
+                     Token::Mod => self.parse_module(true),
+                     Token::Func => Stmt::Function(self.parse_function_with_visibility(false, true)),
+                     Token::Struct => Stmt::StructDef(self.parse_struct(true)),
+                     Token::Enum => Stmt::EnumDef(self.parse_enum(true)),
+                     _ => panic!("Expected Item after Pub"), 
+                }
+            },
             Token::Mut | Token::Mutable => {
                 self.advance();
                 if let Token::Identifier(name) = self.current() {
@@ -1127,6 +1467,12 @@ impl Parser {
             self.advance();
             "error".to_string()
         };
+
+        if self.current() == Token::Semicolon {
+            self.advance();
+            return StructDef { name, fields, is_public };
+        }
+
         self.expect(Token::Colon, vec![Token::End]);
         
         while !matches!(self.current(), Token::End | Token::EOF) {
@@ -1171,84 +1517,93 @@ impl Parser {
         
         StructDef { name, fields, is_public }
     }
-
     fn parse_enum(&mut self, is_public: bool) -> EnumDef {
-        self.expect(Token::Enum, vec![Token::Colon, Token::End]);
+    self.expect(Token::Enum, vec![Token::Colon, Token::End]);
+            
+    let mut variants = Vec::new();
+    let name = if let Token::Identifier(name) = self.current() {
+        self.advance();
+        name
+    } else {
+        self.advance();
+        "error".to_string()
+    };
+    
+    self.expect(Token::Colon, vec![Token::End]);
+
+    while !matches!(self.current(), Token::End | Token::EOF) {
+        if let Token::Identifier(vname) = self.current() {
+            self.advance();
+            
+            if self.current() == Token::LeftParen {
+                self.advance();
+
+                let is_struct_like = matches!(self.current(), Token::Identifier(_)) 
+                    && self.peek(1) == Token::Colon;
                 
-        let mut variants = Vec::new();
-        let name = if let Token::Identifier(name) = self.current() {
-            self.advance();
-            name
-                } else {
-             self.advance();
-            "error".to_string()
-        };
-        
-        self.expect(Token::Colon, vec![Token::End]);
-
-        
-        while !matches!(self.current(), Token::End | Token::EOF) {
-             if let Token::Identifier(vname) = self.current() {
-                 self.advance();
-                 
-                 if self.current() == Token::LeftParen {
-                     self.advance();
-
-                     let is_struct_like = matches!(self.current(), Token::Identifier(_)) && self.peek(1) == Token::Colon;
+                if is_struct_like {
                      
-                     if is_struct_like {
-                         let mut fields = Vec::new();
-                         while self.current() != Token::RightParen && self.current() != Token::EOF {
-                            let fname = 
-                                if let Token::Identifier(n) =
-                                    self.current() { 
-                                        n 
-                                    } else { 
-                                "err".to_string() 
-                            };
+                    let mut fields = Vec::new();
+                    while self.current() != Token::RightParen && self.current() != Token::EOF {
+                        let fname = if let Token::Identifier(n) = self.current() { 
+                            n 
+                        } else { 
+                            "err".to_string() 
+                        };
 
-                            self.advance();
-                            self.expect(Token::Colon, vec![Token::Comma, Token::RightParen]);
-                             
-                            fields.push(StructField { 
-                                name: fname, 
-                                ty: self.parse_type(), 
-                                is_public: true, 
-                                is_mutable: true 
-                            });
+                        self.advance();
+                        self.expect(Token::Colon, vec![Token::Comma, Token::RightParen]);
+                        
+                        fields.push(StructField { 
+                            name: fname, 
+                            ty: self.parse_type(), 
+                            is_public: true, 
+                            is_mutable: true 
+                        });
 
-                            if self.current() == Token::Comma { 
-                                self.advance(); 
-                            }
-                         }
-                         self.expect(Token::RightParen, vec![Token::End]);
-                         variants.push(EnumVariant::Struct(vname, fields));
-                     } else {
-                         let mut types = Vec::new();
-                         while self.current() != Token::RightParen && self.current() != Token::EOF {
-                             types.push(self.parse_type());
-                             if self.current() == Token::Comma { self.advance(); }
-                         }
-                         self.expect(Token::RightParen, vec![Token::End]);
-                         variants.push(EnumVariant::Tuple(vname, types));
-                     }
-                 } else {
-                     variants.push(EnumVariant::Simple(vname));
-                 }
+                        if self.current() == Token::Comma { 
+                            self.advance(); 
+                        }
+                    }
+                    self.expect(Token::RightParen, vec![Token::End]);
+                    variants.push(EnumVariant::Struct(vname, fields));
+                } else {
+                     
+                    let mut types = Vec::new();
+                    while self.current() != Token::RightParen && self.current() != Token::EOF {
+                        types.push(self.parse_type());
+                        if self.current() == Token::Comma { 
+                            self.advance(); 
+                        }
+                    }
+                    self.expect(Token::RightParen, vec![Token::End]);
+                    
+                     
+                    if types.len() == 1 {
+                        variants.push(EnumVariant::Tuple(vname, types));
+                    } else {
+                        variants.push(EnumVariant::Tuple(vname, types));
+                    }
+                }
+            } else {
                  
-                 if self.current() == Token::Comma { self.advance(); }
-             } else {
-                 self.advance();
-             }
-        }
-        
-        if self.current() == Token::End {
+                variants.push(EnumVariant::Simple(vname));
+            }
+            
+            if self.current() == Token::Comma { 
+                self.advance(); 
+            }
+        } else {
             self.advance();
         }
-        
-        EnumDef { name, variants, is_public }
     }
-
+    
+    if self.current() == Token::End {
+        self.advance();
+    }
+    
+    EnumDef { name, variants, is_public }
+}
 
     fn parse_function(&mut self, is_module: bool) -> Function {
         self.parse_function_with_visibility(is_module, false)
@@ -1376,8 +1731,29 @@ impl Parser {
     }
 
     fn parse_import(&mut self) -> ImportDecl {
-        self.expect(Token::Import, vec![Token::Semicolon, Token::From]);
+         
+        if self.current() == Token::From {
+            self.advance();
+            if let Token::Identifier(from) = self.current() {
+                self.advance();
+                self.expect(Token::Import, vec![Token::Star]);
+                self.expect(Token::Star, vec![Token::Semicolon]);
+                return ImportDecl::WildcardImport { from };
+            }
+        }
+
+        self.expect(Token::Import, vec![Token::Semicolon, Token::From, Token::Star]);
         
+         
+        if self.current() == Token::Star {
+             self.advance();
+             self.expect(Token::From, vec![Token::Identifier("".to_string())]);
+             if let Token::Identifier(from) = self.current() {
+                 self.advance();
+                 return ImportDecl::WildcardImport { from };
+             }
+        }
+
         if let Token::Identifier(name) = self.current() {
             self.advance();
             
@@ -1395,7 +1771,40 @@ impl Parser {
         
         ImportDecl::LibraryImport { name: "unknown".to_string() }
     }
- pub fn parse(mut self) -> (Program, Vec<StructDef>, Vec<EnumDef>, Vec<ExternDecl>, Vec<ModuleImport>, Vec<ModuleUse>, Vec<ClassDef>, Vec<ImplBlock>, Vec<TraitDef>, UndefinedFunctions, Vec<ImportDecl>) {
+    fn parse_module(&mut self, is_public: bool) -> Stmt {
+        self.expect(Token::Mod, vec![Token::Identifier("".to_string())]);
+        
+        let name = if let Token::Identifier(name) = self.current() {
+            self.advance();
+            name
+        } else {
+             self.advance();
+            "error".to_string()
+        };
+        
+        self.expect(Token::LeftBrace, vec![Token::End]);
+        
+        let mut body = Vec::new();
+        while !matches!(self.current(), Token::RightBrace | Token::EOF) {
+             println!("DEBUG: Module body token: {:?}", self.current());
+             body.push(self.parse_stmt());
+             if self.current() == Token::Semicolon {
+                 self.advance();
+             }
+        }
+        
+        println!("DEBUG: Expecting RightBrace");
+        self.expect(Token::RightBrace, vec![Token::Semicolon]);
+        println!("DEBUG: Finished parsing module");
+        
+        Stmt::ModuleDef {
+            name,
+            body,
+            is_public
+        }
+    }
+
+    pub fn parse(mut self) -> (Program, Vec<StructDef>, Vec<EnumDef>, Vec<ExternDecl>, Vec<ModuleImport>, Vec<ModuleUse>, Vec<ClassDef>, Vec<ImplBlock>, Vec<TraitDef>, UndefinedFunctions, Vec<ImportDecl>) {
         let mut functions = Vec::new();
         let mut structs = Vec::new();
         let mut enums = Vec::new();
@@ -1406,37 +1815,94 @@ impl Parser {
         let mut impls = Vec::new();
         let traits = Vec::new();
         let mut import_decls = Vec::new();
+        let mut constants = Vec::new();
+        let mut modules = Vec::new();
+        let mut stmts: Vec<Stmt> = Vec::new();  
        
          
         while self.current() != Token::EOF {
-            if self.current() == Token::Import {
+            if self.current() == Token::Import || self.current() == Token::From {
                 import_decls.push(self.parse_import());
             } else {
                 break;
             }
         }
         
-         
         let import_context = Self::build_import_context(&import_decls);
         
-         
-        self.pos = import_decls.len();
-        
-         
         while self.current() != Token::EOF {
+            println!("DEBUG: Current token: {:?}", self.current());
             match self.current() {
-                Token::Import => {
+                Token::Import => { self.advance(); }
+                
+                Token::Pub => {
+                    self.advance();
+                    println!("DEBUG: Inside Pub");
+                    match self.current() {
+                        Token::Mod => {
+                             println!("DEBUG: Parsing public module");
+                             modules.push(self.parse_module(true));
+                        }
+                        Token::Func => {
+                            println!("DEBUG: Parsing public function");
+                            functions.push(self.parse_function_with_visibility(false, true));
+                        }
+                        Token::Struct => structs.push(self.parse_struct(true)),
+                        Token::Enum => enums.push(self.parse_enum(true)),
+                        _ => { self.advance(); }
+                    }
+                }
+
+                Token::Mod => {
+                     println!("DEBUG: Parsing Mod");
+                     if let Token::String(_) = self.peek(1) {
+                         self.advance();
+                         if let Token::String(path) = self.current() {
+                             self.advance();
+                             imports.push(ModuleImport { path });
+                         }
+                     } else {
+                         modules.push(self.parse_module(false));
+                     }
+                }
+
+                Token::Const => {
                      
                     self.advance();
+                    if let Token::Identifier(name) = self.current() {
+                        self.advance();
+                        let ty = if self.current() == Token::Colon {
+                            self.advance();
+                            self.parse_type()
+                        } else {
+                            Type::Void
+                        };
+                        
+                        self.expect(Token::Equals, vec![Token::Semicolon]);
+                        let value = self.parse_expr();
+                        if self.current() == Token::Semicolon {
+                            self.advance();
+                        }
+                        constants.push(GlobalConst { name, ty, value });
+                    } else {
+                        self.advance();
+                    }
                 }
-            
+
                 Token::Enum => {
                     enums.push(self.parse_enum(false));
                 }
 
                 Token::Func => {
+                    println!("DEBUG: Parsing function");
                     let func = self.parse_function_with_visibility(false, false);
                     functions.push(func);
+                    println!("DEBUG: Functions count: {}", functions.len());
+                }
+
+                Token::Struct => {
+                    println!("DEBUG: Parsing struct");
+                    structs.push(self.parse_struct(false));
                 }
 
                 Token::Impl => {
@@ -1720,7 +2186,7 @@ impl Parser {
                             self.advance();
                             "".to_string()
                         };
-                        
+
                         self.expect(Token::Colon, vec![Token::End, Token::Func]);
                         
                         let mut functions_list = Vec::new();
@@ -1991,7 +2457,7 @@ impl Parser {
                                 } else {
                                     externs.push(ExternDecl::SingleWithBody {
                                         abi,
-                                        func: ExternFunctionWithBody {
+                                        func: ExternFunctionBody {
                                             name,
                                             params,
                                             return_type,
@@ -2054,8 +2520,9 @@ impl Parser {
         
         let undefined = self.find_undefined_functions(&functions, &externs, &import_context);
             
-        (Program { functions }, structs, enums, externs, imports, uses, classes, impls, traits, undefined, import_decls)
+        (Program { functions, constants, modules }, structs, enums, externs, imports, uses, classes, impls, traits, undefined, import_decls)
     }
+    
     fn find_undefined_functions(
         &self, 
         functions: &[Function], 

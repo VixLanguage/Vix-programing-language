@@ -3,6 +3,8 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
+const VERSION: &str = "Alpha 3.0v";
+
 fn print_help() {
     println!("{}", "Vix Compiler".bright_cyan().bold());
     println!("Usage: vix [command] [options]");
@@ -11,6 +13,7 @@ fn print_help() {
     println!("  run [--target OS]     Compile and run the program");
     println!("  build [--target OS]   Compile the program without running");
     println!("  path                  Show the Vix installation directory");
+    println!("  version               Show the version information");
     println!("  help                  Show this help message");
     println!();
     println!("Options:");
@@ -24,6 +27,7 @@ fn print_help() {
     println!("  vix build --target linux     # Build for Linux");
     println!("  vix run --debug              # Run with debug output");
     println!("  vix path                     # Show installation directory");
+    println!("  vix version                  # Show version");
 }
 
 fn main() {
@@ -35,16 +39,19 @@ fn main() {
         "run"
     };
 
+    if command == "version" || command == "--version" || command == "-v" {
+        println!("Vix Compiler {}", VERSION);
+        return;
+    }
+
     if command == "help" || command == "--help" || command == "-h" {
         print_help();
         return;
     }
 
-    // Handle path command // There is so many coming new commands too!
     if command == "path" {
         match env::current_exe() {
             Ok(exe_path) => {
-                // Get dir parent. Msg for devs: please add simpler comments if you wanna add tho. It's not really that useful.
                 if let Some(parent) = exe_path.parent() {
                     if parent.file_name().and_then(|n| n.to_str()) == Some("bin") {
                         if let Some(vix_root) = parent.parent() {
@@ -104,17 +111,20 @@ fn main() {
     }
 
     let mut source_files = Vec::new();
+    let src_path = fs::canonicalize(src_dir).unwrap_or(src_dir.to_path_buf());
+    println!("DEBUG: Searching for sources in: {:?}", src_path);
+
     if let Ok(entries) = fs::read_dir(src_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("x") {
+            if path.extension().and_then(|s| s.to_str()) == Some("vix") {
                 source_files.push(path);
             }
         }
     }
 
     if source_files.is_empty() {
-        eprintln!("{} No .x files found in src/", "Error:".red());
+        eprintln!("{} No .vix files found in src/", "Error:".red());
         std::process::exit(1);
     }
 
@@ -143,11 +153,9 @@ fn main() {
         all_import_decls.extend(import_decls);
     }
 
-     
     let footprint_packs = if !all_import_decls.is_empty() {
         match LibraryManager::process_imports_from_decls(&all_import_decls, Some(target)) {
             Ok(packs) => {
-                 
                 if let Err(e) = LibraryManager::validate_imports(&all_import_decls, &packs) {
                     eprintln!("{} Import validation failed: {:?}", "Error:".red(), e);
                     std::process::exit(1);
@@ -163,11 +171,10 @@ fn main() {
         Vec::new()
     };
 
-     
     let arch = ArchConfig::x86_64();
 
     let mut combined_source = String::new();
-    let main_filename = source_files.first().map(|p| p.display().to_string()).unwrap_or_else(|| "main.x".to_string());
+    let main_filename = source_files.first().map(|p| p.display().to_string()).unwrap_or_else(|| "main.vix".to_string());
 
     let mut combined_source_code = String::new();
     for source_file in &source_files {
@@ -180,16 +187,16 @@ fn main() {
     let tokens = lexer.tokenize();
     let parser = Parser::new(tokens, combined_source_code.clone(), lexer.spans.clone());
     let (program, all_structs, all_enums, all_externs, _, _, _, all_impls, _, _, _) = parser.parse();
-
     let mut all_functions = program.functions;
-    let mut combined_source = combined_source_code;
+    let all_constants = program.constants;
+    let combined_source = combined_source_code;
+    let all_modules = program.modules.clone();
 
     if all_functions.is_empty() {
         eprintln!("{} No functions found to compile", "Error:".red());
         std::process::exit(1);
     }
-
-     
+    
     let mut all_library_includes = Vec::new();
     let mut all_library_functions = Vec::new();
     
@@ -231,7 +238,7 @@ fn main() {
         }
     }
     
-    let program = Program { functions: all_functions };
+    let program = Program { functions: all_functions, constants: all_constants, modules: all_modules };
 
     let c_code = match codegen.codegen_program_full(
         &program, 
@@ -254,10 +261,8 @@ fn main() {
         println!("   {} Libraries to link: {:?}", "success:".bright_green(), linked_libs);
     }
 
-     
     println!("   {} Compiling main program to object file", "success:".bright_green());
     
-     
     let main_obj = Path::new("main.o");
     match Clang::compile_to_object(&c_code, main_obj, Some(target)) {
         Ok(_) => println!("   {} Main object file created: {}", "success:".green(), main_obj.display()),
@@ -267,7 +272,6 @@ fn main() {
         }
     }
 
-     
     let mut object_files: Vec<&Path> = vec![main_obj];
     for pack in &footprint_packs {
         let lib_path = Path::new(&pack.source_library);
@@ -300,5 +304,4 @@ fn main() {
             std::process::exit(1);
         }
     }
-
 }

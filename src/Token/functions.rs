@@ -1,7 +1,6 @@
 use crate::import::*;
 
 impl Parser {
-
     pub fn parse_type_identifier(type_name: &str) -> Type {
         if let Some(bits_str) = type_name.strip_prefix("int") {
             if let Ok(bits) = bits_str.parse::<usize>() {
@@ -30,6 +29,15 @@ impl Parser {
 
     pub fn infer_type(expr: &Expr) -> Type {
         match expr {
+            Expr::HashMap(entries) if !entries.is_empty() => {
+                let key_ty = Self::infer_type(&entries[0].0);
+                let val_ty = Self::infer_type(&entries[0].1);
+                Type::HashMap {
+                    key: Box::new(key_ty),
+                    value: Box::new(val_ty),
+                }
+            }
+
             Expr::Number(_) => Type::i32(),
             Expr::HexNumber(_) => Type::i32(),
             Expr::BinaryNumber(_) => Type::i32(),

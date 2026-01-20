@@ -1,9 +1,6 @@
 use crate::import::*;
 
 impl Codegen {
-
-
-
         pub fn codegen_assign(
         &mut self,
         name: &str,
@@ -52,171 +49,9 @@ impl Codegen {
     }
 
 
-    pub fn codegen_typed_declaration_impl(&mut self, name: &str, ty: &Type, value: &Expr, body: &mut String, loc: SourceLocation, is_mutable: bool) -> Result<(), ()> {
-        let (val_var, val_ty) = self.codegen_expr(value, body) .check_error();
-        let c_name = format!("var_{}", name);
-        
-        let base_c_type = ty.to_c_type(&self.arch);
-        // Apply const if immutable, except where initialization via memcpy requires mutability
-        let decl_type = if !is_mutable {
-             match ty {
-                 Type::Array { size: Some(_), .. } | Type::MultiArray { .. } => base_c_type.clone(),
-                 Type::Str { .. } => base_c_type.clone(), 
-                 _ => format!("const {}", base_c_type)
-             }
-        } else {
-            base_c_type.clone()
-        };
-
-        match ty {
-            Type::Void => {
-                self.diagnostics.error(
-                    "VoidVariable",
-                    &format!("Variable '{}' cannot have void type", name),
-                    void_variable_error(name, loc)
-                );
-                return Err(());
-            }
-            
-            Type::Array { element, size: Some(size) } => {
-                if matches!(**element, Type::Void) {
-                    self.diagnostics.error(
-                        "VoidArrayElement",
-                        &format!("Array '{}' cannot have void elements", name),
-                        void_array_error(loc)
-                    );
-                    return Err(());
-                }
-                
-                let elem_c_type = element.to_c_type(&self.arch);
-                
-                body.push_str(&format!("{} {}[{}];\n", elem_c_type, c_name, size));
-                body.push_str(&format!("memcpy({}, {}, sizeof({}));\n", c_name, val_var, c_name));
-            }
-            
-            Type::Array { element, size: None } => {
-                if matches!(**element, Type::Void) {
-                    self.diagnostics.error(
-                        "VoidArrayElement",
-                        &format!("Array '{}' cannot have void elements", name),
-                        void_array_error(loc)
-                    );
-                    return Err(());
-                }
-                
-                let elem_c_type = element.to_c_type(&self.arch);
-                let struct_decl = if !is_mutable { "const struct" } else { "struct" };
-                body.push_str(&format!("{} {{ {}* ptr; size_t len; }} {} = {};\n", struct_decl, elem_c_type, c_name, val_var));
-            }
-            
-            Type::MultiArray { element, dimensions } => {
-                if matches!(**element, Type::Void) {
-                    self.diagnostics.error(
-                        "VoidArrayElement",
-                        &format!("Multi-array '{}' cannot have void elements", name),
-                        void_array_error(loc)
-                    );
-                    return Err(());
-                }
-                
-                let elem_c_type = element.to_c_type(&self.arch);
-                let dims_str = dimensions.iter()
-                    .map(|d| format!("[{}]", d))
-                    .collect::<String>();
-
-                body.push_str(&format!("{} {}{};\n", elem_c_type, c_name, dims_str));
-                body.push_str(&format!("memcpy({}, {}, sizeof({}));\n", c_name, val_var, c_name));
-            }
-            
-            Type::Tuple { fields } => {
-                for (i, field) in fields.iter().enumerate() {
-                    if matches!(field, Type::Void) {
-                        self.diagnostics.error(
-                            "VoidTupleField",
-                            &format!("Tuple field {} in variable '{}' cannot be void", i, name),
-                            ErrorContext {
-                                primary_location: loc.clone(),
-                                secondary_locations: vec![],
-                                help_message: Some(format!("Tuple fields must have concrete types. Field {} is void.", i)),
-                                suggestions: vec![
-                                    format!("Change field {} to a concrete type", i),
-                                    "Use Option<T> for optional fields".to_string(),
-                                ],
-                            }
-                        );
-                        return Err(());
-                    }
-                }
-                
-                body.push_str(&format!("{} {} = {};\n", decl_type, c_name, val_var));
-            }
-            
-            Type::Union { variants } => {
-                for (i, variant) in variants.iter().enumerate() {
-                    if matches!(variant, Type::Void) {
-                        self.diagnostics.error(
-                            "VoidUnionVariant",
-                            &format!("Union variant {} in variable '{}' cannot be void", i, name),
-                            ErrorContext {
-                                primary_location: loc.clone(),
-                                secondary_locations: vec![],
-                                help_message: Some(format!("Union variants must have concrete types. Variant {} is void.", i)),
-                                suggestions: vec![
-                                    format!("Change variant {} to a concrete type", i),
-                                    "Remove the void variant".to_string(),
-                                ],
-                            }
-                        );
-                        return Err(());
-                    }
-                }
-                
-                body.push_str(&format!("{} {} = {};\n", decl_type, c_name, val_var));
-            }
-            
-            Type::Ptr(inner) if matches!(**inner, Type::Void) => {
-                body.push_str(&format!("{} {} = {};\n", decl_type, c_name, val_var));
-            }
-            
-            _ => {
-                if !self.types_compatible(ty, &val_ty) {
-                    let value_loc = value.location();
-                    
-                    self.diagnostics.error(
-                        "TypeMismatch",
-                        &format!("Cannot initialize variable '{}' of type {} with value of type {}", 
-                                name, ty.name(), val_ty.name()),
-                        type_mismatch_error(
-                            &ty.name(),
-                            &val_ty.name(),
-                            loc.clone(),
-                            value_loc,
-                        )
-                    );
-                    return Err(());
-                }
-                
-                match (ty, &val_ty) {
-                    (Type::ConstStr, Type::Str { .. }) => {
-                        body.push_str(&format!("{} {} = {}.ptr;\n", decl_type, c_name, val_var));
-                    }
-                    _ => {
-                        body.push_str(&format!("{} {} = {};\n", decl_type, c_name, val_var));
-                    }
-                }
-            }
-        }
-        
-        if matches!(ty, Type::Owned(_)) {
-            self.owned_vars.insert(name.to_string());
-        }
-        self.vars.insert(name.to_string(), (c_name, ty.clone()));
-        Ok(())
-    }
-
 
     pub fn codegen_compound_assign(&mut self, name: &str, op: &str, value: &Expr, body: &mut String, loc: SourceLocation) -> Result<(), ()> {
-        let (val_var, val_ty) = self.codegen_expr(value, body) .check_error();
+        let (val_var, val_ty) = self.codegen_expr(value, body).check_error();
         
         if let Some((c_name, var_ty)) = self.vars.get(name) {
             if matches!(var_ty, Type::Void) || matches!(val_ty, Type::Void) {
@@ -229,6 +64,50 @@ impl Codegen {
             }
             
             let c_name = c_name.clone();
+
+            if op == "+=" {
+                match (&var_ty, &val_ty) {
+                    (Type::Array { element: arr_elem, .. }, Type::Array { element: val_elem, .. }) => {
+                        if !self.types_compatible(arr_elem, val_elem) {
+                            self.diagnostics.error(
+                                "TypeMismatch",
+                                &format!("Cannot append {}[] to {}[]", val_elem.name(), arr_elem.name()),
+                                ErrorContext {
+                                    primary_location: loc,
+                                    secondary_locations: vec![],
+                                    help_message: Some("Array elements must have the same type".to_string()),
+                                    suggestions: vec![
+                                        "Convert elements to matching type".to_string(),
+                                    ],
+                                }
+                            );
+                            return Err(());
+                        }
+                        
+                        let c_name_clone = c_name.clone();
+                        let arr_elem_clone = arr_elem.clone();
+
+                        self.codegen_extend(&c_name_clone, &val_var, &arr_elem_clone, body);
+                        return Ok(());
+                    }
+
+                    (Type::StdStr, Type::Str { .. } | Type::ConstStr) => {
+                        body.push_str(&format!("String_push_str(&{}, {});\n", c_name, val_var));
+                        return Ok(());
+                    }
+                    (Type::StdStr, Type::StdStr) => {
+                        body.push_str(&format!("String_push_str(&{}, String_as_str(&{}));\n", c_name, val_var));
+                        return Ok(());
+                    }
+                    (Type::StdStr, Type::Char { .. }) => {
+                        body.push_str(&format!("String_push(&{}, {});\n", c_name, val_var));
+                        return Ok(());
+                    }
+                    
+                    _ => {}
+                }
+            }
+            
             body.push_str(&format!("{} {} {};\n", c_name, op, val_var));
             Ok(())
         } else {
@@ -246,6 +125,62 @@ impl Codegen {
         }
     }
     pub fn codegen_call_expr(&mut self, func: &str, args: &[Expr], body: &mut String, loc: SourceLocation) -> Result<(String, Type), ()> {
+        eprintln!("[DEBUG] codegen_call_expr: func_name={}", func);
+
+        if self.structs.contains_key(func) {
+            let constructor_name = format!("{}_new", func);
+            
+            let mut arg_vars = Vec::new();
+            
+            if args.is_empty() {
+                if let Some(struct_info) = self.structs.get(func) {
+                    for (_, field_ty, _) in &struct_info.fields {
+                        let default_val = match field_ty {
+                            Type::Int { .. } => "0",
+                            Type::Float { .. } => "0.0",
+                            Type::Bool => "false",
+                            Type::Str { .. } => "((Slice_char){ .ptr = \"\", .len = 0 })",
+                            Type::ConstStr => "\"\"",
+                            _ => "{ 0 }",
+                        };
+                        arg_vars.push(default_val.to_string());
+                    }
+                }
+            } else {
+                for arg in args {
+                    let (var, _ty) = self.codegen_expr(arg, body).check_error();
+                    arg_vars.push(var);
+                }
+            }
+            
+            let tmp = self.fresh_var();
+            let args_str = arg_vars.join(", ");
+            
+            body.push_str(&format!("{} {} = {}({});\n", func, tmp, constructor_name, args_str));
+            return Ok((tmp, Type::Struct { name: func.to_string() }));
+        }
+
+            
+        if self.linked_libraries.contains(&func.to_string()) {
+            self.diagnostics.error(
+                "InvalidLibraryCall",
+                &format!("Cannot call library '{}' directly", func),
+                ErrorContext {
+                    primary_location: loc.clone(),
+                    secondary_locations: vec![],
+                    help_message: Some(format!(
+                        "Library '{}' is an import, not a function. Use '{}.<module>.<function>()' to call functions from this library.",
+                        func, func
+                    )),
+                    suggestions: vec![
+                        format!("Use '{}.ModuleName.function_name()' instead", func),
+                        "Check the library's exported modules and functions".to_string(),
+                    ],
+                }
+            );
+            return Err(());
+        }
+
         match func {
             "print" => {
                 let mut format_str = String::new();
@@ -257,6 +192,11 @@ impl Codegen {
                         Type::Int { .. } => {
                             format_str.push_str("%d");
                             arg_list.push(var);
+                        }
+                        Type::StdStr => {
+                            format_str.push_str("%.*s");
+                            arg_list.push(format!("(int){}.len", var));
+                            arg_list.push(format!("{}.ptr", var));
                         }
                         Type::Float { .. } => {
                             format_str.push_str("%f");
@@ -278,7 +218,27 @@ impl Codegen {
                         }
                         Type::Char { .. } => {
                             format_str.push_str("%c");
-                            arg_list.push(var);
+                            arg_list
+                            .push(var);
+                        }
+                        Type::Array { element, .. } => {
+                            let loop_var = self.fresh_var();
+                            body.push_str(&format!("for (size_t {} = 0; {} < {}.len; {}++) {{\n", loop_var, loop_var, var, loop_var));
+                            body.push_str(&format!("  if ({} > 0) printf(\" \");\n", loop_var));
+
+                            match element.as_ref() {
+                                Type::Str { .. } | Type::ConstStr => {
+                                    body.push_str(&format!("  printf(\"%.*s\", (int){}.ptr[{}].len, {}.ptr[{}].ptr);\n",  var, loop_var, var, loop_var));
+                                }
+                                Type::Int { .. } => {
+                                    body.push_str(&format!("  printf(\"%d\", {}.ptr[{}]);\n", var, loop_var));
+                                }
+                                _ => {
+                                    body.push_str(&format!("printf(\"%p\", {}.ptr[{}]);\n", var, loop_var));
+                                }
+                            }
+                            body.push_str("}\n");
+                            continue;  
                         }
                         _ => {
                             format_str.push_str("%p");
@@ -298,29 +258,54 @@ impl Codegen {
                 body.push_str(&format!("int32_t {} = printf(\"{}\"{});\n", tmp, format_str, args_final));
                 return Ok((tmp, Type::i32()));
             }
+            "format" => {
+                let mut arg_vars = Vec::new();
+                for arg in args {
+                    let (var, ty) = self.codegen_expr(arg, body).check_error();
+                    match ty {
+                        Type::Str { .. } => arg_vars.push(var),  
+                        Type::ConstStr => arg_vars.push(format!("vix_string_from_const({})", var)),
+                        _ => arg_vars.push(var),
+                    }
+                }
+                let tmp = self.fresh_var();
+                let args_str = arg_vars.join(", ");
+                let ty = Type::Str { len_type: Box::new(Type::i64()) };
+                let c_type = ty.to_c_type(&self.arch, &mut self.type_registry);
+                body.push_str(&format!("{} {} = vix_format({});\n", c_type, tmp, args_str));
+                return Ok((tmp, ty));
+            }
             
             "chars" => {
                 if args.len() != 1 { return Err(()); }
                 self.codegen_chars(&args[0], body)
             }
-            "str" | "string" => {
+
+            "str" | "string" | "String" => {
                 if args.len() != 1 { return Err(()); }
+                self.ensure_string_typedef();
+                self.ensure_to_string_helpers();
                 let (var, ty) = self.codegen_expr(&args[0], body).check_error();
+                eprintln!("[DEBUG] string() arg type: {:?}", ty.name());
                 match ty {
                     Type::Int { .. } => {
                         let tmp = self.fresh_var();
-                        body.push_str(&format!("String {} = vix_int_to_str({});\n", tmp, var));
-                        Ok((tmp, Type::Str { len_type: Box::new(Type::i64()) }))
+                        let ty = Type::Str { len_type: Box::new(Type::i64()) };
+                        let c_type = ty.to_c_type(&self.arch, &mut self.type_registry);
+                        body.push_str(&format!("{} {} = vix_int_to_str({});\n", c_type, tmp, var));
+                        Ok((tmp, ty))
                     }
                     Type::Str { .. } => Ok((var, ty)),
                     Type::ConstStr => {
                         let tmp = self.fresh_var();
-                        body.push_str(&format!("String {} = vix_string_from_const({});\n", tmp, var));
-                        Ok((tmp, Type::Str { len_type: Box::new(Type::i64()) }))
+                        let ty = Type::Str { len_type: Box::new(Type::i64()) };
+                        let c_type = ty.to_c_type(&self.arch, &mut self.type_registry);
+                        body.push_str(&format!("{} {} = vix_string_from_const({});\n", c_type, tmp, var));
+                        Ok((tmp, ty))
                     }
                     _ => {
-                        // For other types, we might just return the address or something, 
-                        // but let's stick to int per plan for now.
+                         
+                         
                         Err(())
                     }
                 }
@@ -407,7 +392,77 @@ impl Codegen {
             }
             "panic" => {
                 if args.len() != 1 { return Err(()); }
-                self.codegen_panic(&args[0], body)
+                self.codegen_make_panic(&args[0], body)
+            }
+            "as_bytes" => {
+                if args.len() != 1 { return Err(()); }
+                self.ensure_type_defined(&Type::u8());
+                let (obj_var, obj_ty) = self.codegen_expr(&args[0], body)?;
+                let tmp = self.fresh_var();
+                let slice_ty = Type::Array { element: Box::new(Type::u8()), size: None };
+                let slice_name = slice_ty.to_c_type(&self.arch, &mut self.type_registry);
+                body.push_str(&format!("{} {} = {{ .ptr = (uint8_t*){}.ptr, .len = {}.len }};\n", 
+                    slice_name, tmp, obj_var, obj_var));
+                 
+                return Ok((tmp, slice_ty));
+            }
+            "as_ptr" => {
+                if args.len() != 1 { return Err(()); }
+                let (obj_var, obj_ty) = self.codegen_expr(&args[0], body)?;
+                let tmp = self.fresh_var();
+                let inner_type = match &obj_ty {
+                    Type::Array { element, .. } => *element.clone(),
+                    Type::Str { .. } => Type::char8(),
+                    _ => Type::Void,
+                };
+                body.push_str(&format!("const {}* {} = {}.ptr;\n", 
+                    inner_type.to_c_type(&self.arch, &mut self.type_registry), tmp, obj_var));
+                return Ok((tmp, Type::Ptr(Box::new(Type::Const(Box::new(inner_type))))));
+            }
+            "as_mut_ptr" => {
+                if args.len() != 1 { return Err(()); }
+                let (obj_var, obj_ty) = self.codegen_expr(&args[0], body)?;
+                let tmp = self.fresh_var();
+                let inner_type = match &obj_ty {
+                    Type::Array { element, .. } => *element.clone(),
+                    Type::Str { .. } => Type::char8(),
+                    _ => Type::Void,
+                };
+                body.push_str(&format!("{}* {} = {}.ptr;\n", 
+                    inner_type.to_c_type(&self.arch, &mut self.type_registry), tmp, obj_var));
+                return Ok((tmp, Type::MutRef(Box::new(inner_type))));
+            }
+
+            "to_string" => {
+                if args.len() != 1 { return Err(()); }
+                let (obj_var, obj_ty) = self.codegen_expr(&args[0], body).check_error();
+                
+                self.ensure_string_typedef();
+                self.ensure_to_string_helpers();
+                
+                let ty = Type::Str { len_type: Box::new(Type::i64()) };
+                let c_type = ty.to_c_type(&self.arch, &mut self.type_registry);
+                let tmp = self.fresh_var();
+                
+                match &obj_ty {
+                    Type::Int { .. } => {
+                        body.push_str(&format!("{} {} = vix_int_to_str((int64_t){});\n", c_type, tmp, obj_var));
+                    }
+                    Type::Float { .. } => {
+                        body.push_str(&format!("{} {} = vix_float_to_str((double){});\n", c_type, tmp, obj_var));
+                    }
+                    Type::Bool => {
+                        body.push_str(&format!("{} {} = vix_bool_to_str({});\n", c_type, tmp, obj_var));
+                    }
+                    Type::Str { .. } | Type::ConstStr => {
+                        return Ok((obj_var, ty));
+                    }
+                    _ => {
+                         body.push_str(&format!("{} {} = {{ .ptr = \"<object>\", .len = 8 }};\n", c_type, tmp));
+                    }
+                }
+                
+                return Ok((tmp, ty));
             }
             _ => {
                 self.codegen_std_call(func, args, body, loc)
@@ -427,9 +482,28 @@ impl Codegen {
                 return Err(());
             };
             let tmp = self.fresh_var();
-            let c_type = field_ty.to_c_type(&self.arch);
+            let c_type = field_ty.to_c_type(&self.arch, &mut self.type_registry);
             body.push_str(&format!("{} {} = {}.{};\n", c_type, tmp, obj_var, field));
             return Ok((tmp, field_ty));
+        }
+
+        if let Some((_params, ret_ty, is_instance)) = self.impl_methods.get(&(obj_ty.name(), field.to_string())).cloned() {
+            let tmp = self.fresh_var();
+            let c_type = ret_ty.to_c_type(&self.arch, &mut self.type_registry);
+            let method_name = format!("{}_{}", obj_ty.name(), field);
+            let arg = if is_instance { format!("&{}", obj_var) } else { obj_var };
+            body.push_str(&format!("{} {} = {}({});\n", c_type, tmp, method_name, arg));
+            return Ok((tmp, ret_ty));
+        } else if let Some((_params, ret_ty)) = self.user_functions.get(field).cloned() {
+            let tmp = self.fresh_var();
+            let c_type = ret_ty.to_c_type(&self.arch, &mut self.type_registry);
+            body.push_str(&format!("{} {} = {}({});\n", c_type, tmp, field, obj_var));
+            return Ok((tmp, ret_ty));
+        } else if let Some(ext_info) = self.extern_functions.get(field).cloned() {
+            let tmp = self.fresh_var();
+            let c_type = ext_info.return_type.to_c_type(&self.arch, &mut self.type_registry);
+            body.push_str(&format!("{} {} = {}({});\n", c_type, tmp, field, obj_var));
+            return Ok((tmp, ext_info.return_type));
         }
 
         let struct_name = match &obj_ty {
@@ -438,7 +512,7 @@ impl Codegen {
                 if let Type::Struct { name } = &**inner {
                     name.clone()
                 } else {
-                    return Err(());
+                    return Err(())
                 }
             }
             _ => return Err(()),
@@ -457,7 +531,7 @@ impl Codegen {
         let tmp = self.fresh_var();
         let op = if matches!(obj_ty, Type::Ref(_) | Type::MutRef(_) | Type::Ptr(_)) { "->" } else { "." };
         
-        let c_type = field_ty.to_c_type(&self.arch);
+        let c_type = field_ty.to_c_type(&self.arch, &mut self.type_registry);
         body.push_str(&format!("{} {} = {}{}{};\n", c_type, tmp, obj_var, op, field));
         Ok((tmp, field_ty))
     }
@@ -471,10 +545,17 @@ impl Codegen {
     }
 
     pub fn codegen_index_assign(&mut self, arr: &Expr, indices: &[Expr], value: &Expr, body: &mut String, _loc: SourceLocation) -> Result<(), ()> {
-        let (arr_var, _arr_ty) = self.codegen_expr(arr, body).check_error();
+        let (arr_var, arr_ty) = self.codegen_expr(arr, body).check_error();
         let (val_var, _val_ty) = self.codegen_expr(value, body).check_error();
         
-        let mut index_str = arr_var.clone();
+         
+        let is_slice = matches!(arr_ty, Type::Array { size: None, .. } | Type::Str { .. });
+        
+        let mut index_str = if is_slice {
+            format!("{}.ptr", arr_var)
+        } else {
+            arr_var.clone()
+        };
         
         for idx in indices {
             let (idx_var, _idx_ty) = self.codegen_expr(idx, body).check_error();
@@ -497,26 +578,34 @@ impl Codegen {
     }
 
     pub fn codegen_call_stmt(&mut self, func: &str, args: &[Expr], body: &mut String, loc: SourceLocation) -> Result<(), ()> {
-        if func == "print" {
-            self.codegen_call_expr(func, args, body, loc).check_error();
-            return Ok(());
+        match func {
+             
+            "print" | "println" | "plan" | "chars" | "str" | "string" | 
+            "have" | "contain" | "contains" | "has" | "is_not_empty" | 
+            "collect" | "contain_all" | "index" | "index_of" | "array" | 
+            "some" | "none" | "ok" | "err" | "unwrap" | "unwrap_or" | 
+            "is_some" | "is_none" | "array_get" | "wait" | "tuple" | 
+            "is_empty" | "filter" | "panic" | "as_bytes" | "as_ptr" | 
+            "as_mut_ptr" | "to_string" => {
+                self.codegen_call_expr(func, args, body, loc)?;
+                return Ok(());
+            }
+            _ => {}
         }
-
+        
         let mut arg_vars = Vec::new();
         
-         
         let param_types = if let Some(ext_info) = self.extern_functions.get(func) {
             Some(ext_info.params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>())
-        } else if let Some((params, _)) = self.user_functions.get(func) {
-            Some(params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>())
-        } else {
+            } else if let Some((params, _)) = self.user_functions.get(func) {
+                Some(params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>())
+            } else {
             None
         };
 
         for (i, arg) in args.iter().enumerate() {
             let (mut var, ty) = self.codegen_expr(arg, body).check_error();
             
-             
             if let Some(params) = &param_types {
                 if let Some(param_ty) = params.get(i) {
                     if (matches!(param_ty, Type::ConstStr) || matches!(param_ty, Type::Ptr(_) | Type::RawPtr(_) | Type::Ref(_) | Type::MutRef(_))) && matches!(ty, Type::Str { .. }) {
@@ -551,8 +640,7 @@ impl Codegen {
         }
     }
 
-
-        pub fn codegen_static_method(
+    pub fn codegen_static_method(
         &mut self, 
         type_name: &str, 
         method: &str, 
@@ -560,34 +648,47 @@ impl Codegen {
         body: &mut String, 
         loc: SourceLocation
     ) -> Result<(String, Type), ()> {
-         
-        let method_name = format!("{}_{}", type_name, method);
-        
-         
+        if method == "new" {
+            println!("[DEBUG] Generating constructor call for {}", type_name);
+
+            let constructor_name = format!("{}_new", type_name);
+
+            let mut arg_vars = Vec::new();
+            for arg in args {
+                let (var, _ty) = self.codegen_expr(arg, body)?;
+                arg_vars.push(var);
+            }
+            
+            let tmp = self.fresh_var();
+            let args_str = arg_vars.join(", ");
+
+            body.push_str(&format!("{} {} = {}({});\n", 
+                type_name, tmp, constructor_name, args_str));
+            
+            return Ok((tmp, Type::Struct { name: type_name.to_string() }));
+        }
+
         let mut arg_vars = Vec::new();
+        let method_name = format!("{}_{}", type_name, method);
         for arg in args {
-            let (var, _ty) = self.codegen_expr(arg, body).check_error();
+            let (var, _ty) = self.codegen_expr(arg, body)?;
             arg_vars.push(var);
         }
         
         let tmp = self.fresh_var();
         let args_str = arg_vars.join(", ");
-        
-         
         let return_type = if let Some((_, ret_ty, _)) = self.impl_methods.get(&(type_name.to_string(), method.to_string())) {
             ret_ty.clone()
         } else if let Some((_, ret_ty)) = self.user_functions.get(&method_name) {
-             
             ret_ty.clone()
         } else {
-             
             self.diagnostics.error(
                 "UndefinedMethod",
                 &format!("Static method '{}::{}' is not defined", type_name, method),
                 ErrorContext {
                     primary_location: loc,
                     secondary_locations: vec![],
-                    help_message: Some(format!("[DEBUG] Method '{}' does not exist for type '{}'", method, type_name)),
+                    help_message: Some(format!("Method '{}' does not exist for type '{}'", method, type_name)),
                     suggestions: vec![
                         format!("Check if '{}' is defined in the impl block for '{}'", method, type_name),
                         "Verify the method name is spelled correctly".to_string(),
@@ -597,15 +698,13 @@ impl Codegen {
             return Err(());
         };
         
-        let c_type = return_type.to_c_type(&self.arch);
-        
-         
+        let c_type = return_type.to_c_type(&self.arch, &mut self.type_registry);
+
         body.push_str(&format!("{} {} = {}({});\n", c_type, tmp, method_name, args_str));
         
         Ok((tmp, return_type))
     }
-
-    
+        
     pub fn codegen_cast(&mut self, expr: &Expr, target_ty: &Type, body: &mut String, loc: SourceLocation) -> Result<(String, Type), ()> {
         let (var, source_ty) = self.codegen_expr(expr, body) .check_error();
 
@@ -622,7 +721,7 @@ impl Codegen {
             );
         }
         
-        let c_type = target_ty.to_c_type(&self.arch);
+        let c_type = target_ty.to_c_type(&self.arch, &mut self.type_registry);
         let tmp = self.fresh_var();
 
         body.push_str(&format!("{} {} = ({}){};\n", c_type, tmp, c_type, var));
@@ -655,6 +754,9 @@ impl Codegen {
             (Type::Const(i1), Type::Const(i2)) => self.types_compatible(i1, i2),
             (Type::Const(i1), other) => self.types_compatible(i1, other),
             (other, Type::Const(i2)) => self.types_compatible(other, i2),
+            (Type::HashMap { key: k1, value: v1 }, Type::HashMap { key: k2, value: v2 }) => {
+                self.types_compatible(k1, k2) && self.types_compatible(v1, v2)
+            },
             _ => false, 
         }
     }
@@ -668,10 +770,8 @@ impl Codegen {
         body: &mut String, 
         loc: SourceLocation
     ) -> Result<(), ()> {
-        let (obj_var, obj_ty) = self.codegen_expr(obj, body)
-            .map_err(|_| ())?;
-        let (val_var, val_ty) = self.codegen_expr(value, body)
-            .map_err(|_| ())?;
+        let (obj_var, obj_ty) = self.codegen_expr(obj, body).map_err(|_| ())?;
+        let (val_var, val_ty) = self.codegen_expr(value, body).map_err(|_| ())?;
 
         if matches!(obj_ty, Type::Void) {
             self.diagnostics.error(
@@ -698,49 +798,31 @@ impl Codegen {
             "."
         };
 
-         
-        if op == "+=" && matches!(val_ty, Type::Str { .. }) {
+        if op == "+=" {
             if let Type::Struct { name: struct_name } = struct_ty {
                 if let Some(struct_info) = self.structs.get(struct_name) {
                     if let Some((_, field_ty, _)) = struct_info.fields.iter()
                         .find(|(fname, _, _)| fname == field) 
                     {
-                        if matches!(field_ty, Type::Str { .. }) {
-                            let tmp = self.fresh_var();
-                            
-                             
-                            if !self.ir.headers.contains("#include <string.h>") {
-                                self.ir.headers.push_str("#include <string.h>\n");
+                        if matches!(field_ty, Type::StdStr) {
+                            match &val_ty {
+                                Type::StdStr => {
+                                    body.push_str(&format!("String_extend(&{}{}{}, &{});\n", obj_var, access_op, field, val_var));
+                                }
+                                Type::Str { .. } | Type::ConstStr => {
+                                    body.push_str(&format!("String_push_str(&{}{}{}, {});\n", obj_var, access_op, field, val_var));
+                                }
+                                Type::Char { .. } => {
+                                    body.push_str(&format!("String_push(&{}{}{}, {});\n", obj_var, access_op, field, val_var));
+                                }
+                                _ => {
+                                    self.ensure_to_string_helpers();
+                                    let tmp = self.fresh_var();
+                                    body.push_str(&format!("String {} = to_string_generic({});\n", tmp, val_var));
+                                    body.push_str(&format!("String_push_str(&{}{}{}, {});\n", 
+                                        obj_var, access_op, field, tmp));
+                                }
                             }
-                            if !self.ir.headers.contains("#include <stdlib.h>") {
-                                self.ir.headers.push_str("#include <stdlib.h>\n");
-                            }
-                            
-                             
-                            body.push_str(&format!(
-                                "size_t {}_len = strlen({}{}{}.ptr) + strlen({}.ptr) + 1;\n", 
-                                tmp, obj_var, access_op, field, val_var
-                            ));
-                            body.push_str(&format!(
-                                "char* {}_new = malloc({}_len);\n", 
-                                tmp, tmp
-                            ));
-                            body.push_str(&format!(
-                                "strcpy({}_new, {}{}{}.ptr);\n", 
-                                tmp, obj_var, access_op, field
-                            ));
-                            body.push_str(&format!(
-                                "strcat({}_new, {}.ptr);\n", 
-                                tmp, val_var
-                            ));
-                            body.push_str(&format!(
-                                "{}{}{}.ptr = {}_new;\n", 
-                                obj_var, access_op, field, tmp
-                            ));
-                            body.push_str(&format!(
-                                "{}{}{}.len = strlen({}_new);\n", 
-                                obj_var, access_op, field, tmp
-                            ));
                             return Ok(());
                         }
                     }
@@ -748,10 +830,7 @@ impl Codegen {
             }
         }
 
-         
         body.push_str(&format!("{}{}{} {} {};\n", obj_var, access_op, field, op, val_var));
         Ok(())
     }
-
-
 }

@@ -151,7 +151,7 @@ impl DiagnosticHandler {
 
     pub fn has_errors(&self) -> bool {
         self.error_count > 0
-    }
+    } 
 
     pub fn print_summary(&self) {
         if self.error_count > 0 || self.warning_count > 0 {

@@ -1,11 +1,5 @@
 use crate::import::*;
-use std::collections::HashSet;
-use std::process::Command;
-
-
 impl std::error::Error for LibraryError {}
-
-
 
 pub struct LibraryManager;
 
@@ -177,6 +171,7 @@ impl LibraryManager {
         Ok(binary_path)
     }
 
+
     fn compile_vix_library(
         source: &str,
         output_path: &PathBuf,
@@ -198,14 +193,23 @@ impl LibraryManager {
         let (program, structs, enums, externs, _, _, _, impls, _, _, _) = parser.parse();
         let arch = ArchConfig::x86_64();
         let mut codegen = Codegen::new(arch, source.to_string(), "library".to_string());
-        let c_code = codegen.codegen_program_full(&program, &structs, &enums, &impls, &externs, library_includes, &[])  .map_err(|_| LibraryError::ParseError("Codegen failed".to_string()))?;
-
+        
          
-        Clang::compile_to_object(&c_code, output_path, target_os).map_err(|e| LibraryError::ParseError(e))?;
+        let c_code = codegen.codegen_library(
+            &program, 
+            &structs, 
+            &enums, 
+            &impls, 
+            &externs, 
+            library_includes
+        ).map_err(|e| LibraryError::ParseError(format!("Codegen failed: {}", e)))?;
+
+        Clang::compile_to_object(&c_code, output_path, target_os)
+            .map_err(|e| LibraryError::ParseError(e))?;
 
         Ok(())
     }
-     
+        
      
      
      
@@ -364,6 +368,9 @@ impl LibraryManager {
                 }
                 ImportDecl::FileImport { name, from } => {
                     imports.push((from.clone(), Some(name.clone())));
+                }
+                ImportDecl::WildcardImport { from } => {
+                    imports.push((from.clone(), None));
                 }
             }
         }
@@ -549,46 +556,7 @@ impl LibraryManager {
         Ok((functions, classes))
     }
 
-    fn extract_function_signatures(lib_metadata: &LibraryMetadata) -> Result<Vec<FunctionSignature>, LibraryError> {
-        let mut signatures = Vec::new();
-
-        for script_path in &lib_metadata.verified_scripts {
-            let source = fs::read_to_string(script_path)
-                .map_err(|e| LibraryError::FileReadError(script_path.clone(), e.to_string()))?;
-
-            let mut lexer = Lexer::new(&source);
-            let tokens = lexer.tokenize();
-            let parser = Parser::new(tokens, source.clone(), lexer.spans.clone());
-            let (program, _, _, _, _, _, _, _, _, _, _) = parser.parse();
-
-             
-            println!("      {} Found {} total functions in library", "→".bright_black(), program.functions.len());
-            for func in &program.functions {
-                println!("         {} Function '{}' - is_public: {}", "→".bright_black(), func.name, func.is_public);
-                
-                if func.is_public {
-                     
-                    let return_type = func.return_type.to_c_type(&ArchConfig::x86_64());
-                    
-                    let parameters: Vec<(String, String)> = func.params.iter()
-                        .map(|(name, ty, _modifier)| (name.clone(), ty.to_c_type(&ArchConfig::x86_64())))
-                        .collect();
-
-                    signatures.push(FunctionSignature {
-                        name: func.name.clone(),
-                        return_type: return_type.clone(),
-                        parameters,
-                        abi: "c".to_string(),
-                    });
-                    
-                    println!("         {} Extracted signature: {} -> {}", "✓".green(), func.name, return_type);
-                }
-            }
-        }
-
-        Ok(signatures)
-    }
-
+    
     pub fn extract_imports_from_source(source: &str) -> Vec<(String, Option<String>)> {
         let mut imports = Vec::new();
         let mut lexer = Lexer::new(source);
@@ -645,9 +613,91 @@ impl LibraryManager {
                         return Err(LibraryError::PathNotFound(name.clone()));
                     }
                 }
+                ImportDecl::WildcardImport { from } => {
+                    let exists = footprint_packs.iter().any(|pack| pack.name == *from);
+                    if !exists {
+                        return Err(LibraryError::PathNotFound(from.clone()));
+                    }
+                }
             }
         }
 
         Ok(())
     }
+
+        pub fn extract_function_signatures(lib_metadata: &LibraryMetadata) -> Result<Vec<FunctionSignature>, LibraryError> {
+        let mut signatures = Vec::new();
+
+        for script_path in &lib_metadata.verified_scripts {
+            let source = fs::read_to_string(script_path)
+                .map_err(|e| LibraryError::FileReadError(script_path.clone(), e.to_string()))?;
+
+            let mut lexer = Lexer::new(&source);
+            let tokens = lexer.tokenize();
+            let parser = Parser::new(tokens, source.clone(), lexer.spans.clone());
+            let (program, _, _, _, _, _, _, _, _, _, _) = parser.parse();
+
+            println!("      {} Scanning {} functions in library", "→".bright_black(), program.functions.len());
+            
+             
+            for func in &program.functions {
+                if func.is_public {
+                    let mut registry = TypeRegistry::new();
+                    let return_type = func.return_type.to_c_type(&ArchConfig::x86_64(), &mut registry);
+                    
+                    let parameters: Vec<(String, String)> = func.params.iter()
+                        .map(|(name, ty, _modifier)| (name.clone(), ty.to_c_type(&ArchConfig::x86_64(), &mut registry)))
+                        .collect();
+
+                    signatures.push(FunctionSignature {
+                        name: func.name.clone(),
+                        return_type: return_type.clone(),
+                        parameters,
+                        abi: "c".to_string(),
+                    });
+                    
+                    println!("         {} Public function: {} -> {}", "✓".green(), func.name, return_type);
+                }
+            }
+            
+             
+            for module in &program.modules {
+                if let Stmt::ModuleDef { name: module_name, body, is_public } = module {
+                    if !is_public {
+                        continue;
+                    }
+                    
+                    println!("      {} Scanning public module: {}", "→".bright_black(), module_name);
+                    
+                    for stmt in body {
+                        if let Stmt::Function(func) = stmt {
+                            if func.is_public {
+                                 
+                                let prefixed_name = format!("{}_{}", module_name, func.name);
+                                
+                                let mut registry = TypeRegistry::new();
+                                let return_type = func.return_type.to_c_type(&ArchConfig::x86_64(), &mut registry);
+                                
+                                let parameters: Vec<(String, String)> = func.params.iter()
+                                    .map(|(name, ty, _modifier)| (name.clone(), ty.to_c_type(&ArchConfig::x86_64(), &mut registry)))
+                                    .collect();
+
+                                signatures.push(FunctionSignature {
+                                    name: prefixed_name.clone(),
+                                    return_type: return_type.clone(),
+                                    parameters,
+                                    abi: "c".to_string(),
+                                });
+                                
+                                println!("         {} Module function: {} -> {}", "✓".green(), prefixed_name, return_type);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(signatures)
+    }
+
 }

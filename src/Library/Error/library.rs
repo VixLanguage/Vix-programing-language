@@ -6,6 +6,12 @@ impl From<toml::de::Error> for LibraryError {
     }
 }
 
+impl From<LibraryError> for String {
+    fn from(error: LibraryError) -> Self {
+        error.to_string()
+    }
+}
+
 impl std::fmt::Display for LibraryError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {

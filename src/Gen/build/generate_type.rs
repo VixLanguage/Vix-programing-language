@@ -2,49 +2,25 @@ use crate::import::*;
 
 impl Codegen {
     pub fn ensure_string_typedef(&mut self) {
-        let typedef = "typedef struct { char* ptr; int64_t len; } String;\n\n";
-        let helpers = r#"
-static String vix_string_concat(String s1, String s2) {
-    String res;
-    res.len = s1.len + s2.len;
-    res.ptr = (char*)malloc(res.len + 1);
-    if (res.ptr) {
-        memcpy(res.ptr, s1.ptr, s1.len);
-        memcpy(res.ptr + s1.len, s2.ptr, s2.len);
-        res.ptr[res.len] = '\0';
-    }
-    return res;
-}
-
-static String vix_int_to_str(int64_t val) {
-    char buf[32];
-    int len = snprintf(buf, sizeof(buf), "%lld", (long long)val);
-    String res;
-    res.len = len;
-    res.ptr = (char*)malloc(len + 1);
-    if (res.ptr) {
-        memcpy(res.ptr, buf, len);
-        res.ptr[len] = '\0';
-    }
-    return res;
-}
-
-static String vix_string_from_const(const char* s) {
-    String res;
-    res.ptr = (char*)s;
-    res.len = s ? strlen(s) : 0;
-    return res;
-}
-
-"#;
-        if !self.ir.forward_decls.contains("typedef struct { char* ptr; int64_t len; } String;") {
-            self.ir.forward_decls.insert_str(0, typedef);
-            self.ir.forward_decls.push_str(helpers);
+         
+        if !self.ir.type_definitions.contains("Slice_char") {
+            let char_c_type = Type::char8().to_c_type(&self.arch, &mut self.type_registry);
+            let typedef = format!(
+                "typedef struct {{\n    {}* ptr;\n    size_t len;\n}} Slice_char;\n",
+                char_c_type
+            );
+            self.ir.type_definitions.push_str(&typedef);
+            self.ir.type_definitions.push_str("\n");
         }
     }
 
+
     pub fn codegen_string(&mut self, s: &str, body: &mut String) -> (String, Type) {
         self.ensure_string_typedef();
+        
+         
+        let ty = Type::Str { len_type: Box::new(Type::i64()) };
+        let c_type = ty.to_c_type(&self.arch, &mut self.type_registry);
         
         let tmp = self.fresh_var();
         let escaped = s.replace('\\', "\\\\")
@@ -53,17 +29,22 @@ static String vix_string_from_const(const char* s) {
             .replace('\r', "\\r")
             .replace('\t', "\\t");
         
-        body.push_str(&format!("String {} = {{ .ptr = \"{}\", .len = {} }};\n", tmp, escaped, s.len()
-        ));
+         
+        body.push_str(&format!("{} {} = {{ .ptr = \"{}\", .len = {} }};\n", 
+            c_type, tmp, escaped, s.len()));
         
-        (tmp, Type::Str { len_type: Box::new(Type::i64()) })
+        (tmp, ty)
     }
 
-
-    pub fn codegen_number(&mut self, n: i32, body: &mut String) -> (String, Type) {
+    pub fn codegen_number(&mut self, n: i64, body: &mut String) -> (String, Type) {
         let tmp = self.fresh_var();
-        body.push_str(&format!("int32_t {} = {};\n", tmp, n));
-        (tmp, Type::i32())
+        if n >= i32::MIN as i64 && n <= i32::MAX as i64 {
+            body.push_str(&format!("int32_t {} = {};\n", tmp, n));
+            (tmp, Type::i32())
+        } else {
+            body.push_str(&format!("int64_t {} = {}LL;\n", tmp, n));
+            (tmp, Type::i64())
+        }
     }
 
     pub fn codegen_float(&mut self, f: f32, body: &mut String) -> (String, Type) {
@@ -101,4 +82,4 @@ static String vix_string_from_const(const char* s) {
         body.push_str(&format!("int32_t {} = 0{:o};\n", tmp, n));
         (tmp, Type::i32())
     }
-}   
+}

@@ -14,21 +14,21 @@ pub use levenshtein::levenshtein;
 pub use miette::{Diagnostic, NamedSource, Report, SourceSpan};
 pub use ordered_float::OrderedFloat;
 pub use crate::Library::manager::FunctionSignature;
-pub use crate::Token::Storge::Token::Token;
-pub use crate::Token::Storge::AST::{Stmt, Function, ExternDecl, ExternFunction, ExternFunctionWithBody, CodegenConfig, CompilationMode, OptimizationLevel,
+pub use crate::Token::storge::token::Token;
+pub use crate::Token::storge::ast::{Stmt, Function, ExternDecl, ExternFunction, ExternFunctionBody, CodegenConfig, CompilationMode, OptimizationLevel,
     StructDef, StructField, TraitDef, TraitMethod, ImplBlock, ImplMethod, ExternFunctionMap,
     ModuleImport, ModuleUse, ImportDecl, MatchCase, CastTarget, Codegen,
-    ParamModifier, SelfModifier, Program, UndefinedFunction, UndefinedFunctions, ClassDef, Parser, EnumDef, EnumVariant
+    ParamModifier, SelfModifier, Program, UndefinedFunction, UndefinedFunctions, ClassDef, Parser, EnumDef, EnumVariant, GlobalConst, FunctionInfo
 };
 pub use crate::Gen::codegen::ErrorCheck;
 pub use crate::Gen::config::ArchConfig;
-pub use crate::Token::Storge::AST::Type; 
-pub use crate::Gen::API::Clang::{Clang, TargetOS};
-pub use crate::Token::Lexer::*;
-pub use crate::Token::Storge::AST::IR;
-pub use crate::Gen::Type::{EnumDefinition, StructDefinition, TypeRegistry};
+pub use crate::Token::storge::ast::Type; 
+pub use crate::Gen::API::clang::{Clang, TargetOS};
+pub use crate::Token::lexer::*;
+pub use crate::Token::storge::ast::IR;
+pub use crate::Gen::r#type::{EnumDefinition, StructDefinition, TypeRegistry};
 pub use crate::Gen::API::error::*;
-pub use crate::Token::Storge::Expr::Expr;
-pub use crate::Token::Storge::AST::StructInfo;
+pub use crate::Token::storge::expr::Expr;
+pub use crate::Token::storge::ast::StructInfo;
 pub use crate::Library::manager::{DependencyInfo, PackageInfo, PackageInformation, PackageJson, FootprintPack, LibraryError, LibraryMetadata};
 pub use crate::Library::manager::LibraryManager;
