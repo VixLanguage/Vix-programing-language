@@ -153,7 +153,7 @@ impl Codegen {
         
         let library = library.trim();
         let filename = if library.contains('/') || library.contains('\\') {
-            library.split(&['/', '\\'][..]).last().unwrap_or(library)
+            library.split(&['/', '\\'][..]).next_back().unwrap_or(library)
                 } else {
             library
         };

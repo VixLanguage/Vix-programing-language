@@ -35,7 +35,7 @@ impl Codegen {
         
          
         match (&var_ty, &val_ty) {
-            (Type::ConstStr { .. }, Type::Str { .. }) => {
+            (Type::ConstStr, Type::Str { .. }) => {
                  
                 body.push_str(&format!("{} = {}.ptr;\n", c_name, val_var));
             }
@@ -205,12 +205,12 @@ impl Codegen {
                         Type::Str { .. } => {
                             format_str.push_str("%s");
                             arg_list.push(format!("{}.ptr", var));
-                            if let Expr::String(s) = arg { if s.contains('\r') { has_r = true; } }
+                            if let Expr::String(s) = arg && s.contains('\r') { has_r = true; }
                         }
                         Type::ConstStr => {
                             format_str.push_str("%s");
                             arg_list.push(var);
-                            if let Expr::String(s) = arg { if s.contains('\r') { has_r = true; } }
+                            if let Expr::String(s) = arg && s.contains('\r') { has_r = true; }
                         }
                         Type::Bool => {
                             format_str.push_str("%s");
@@ -256,7 +256,7 @@ impl Codegen {
                 let tmp = self.fresh_var();
                 let args_final = if arg_list.is_empty() { String::new() } else { format!(", {}", arg_list.join(", ")) };
                 body.push_str(&format!("int32_t {} = printf(\"{}\"{});\n", tmp, format_str, args_final));
-                return Ok((tmp, Type::i32()));
+                Ok((tmp, Type::i32()))
             }
             "format" => {
                 let mut arg_vars = Vec::new();
@@ -273,7 +273,7 @@ impl Codegen {
                 let ty = Type::Str { len_type: Box::new(Type::i64()) };
                 let c_type = ty.to_c_type(&self.arch, &mut self.type_registry);
                 body.push_str(&format!("{} {} = vix_format({});\n", c_type, tmp, args_str));
-                return Ok((tmp, ty));
+                Ok((tmp, ty))
             }
             
             "chars" => {
@@ -404,7 +404,7 @@ impl Codegen {
                 body.push_str(&format!("{} {} = {{ .ptr = (uint8_t*){}.ptr, .len = {}.len }};\n", 
                     slice_name, tmp, obj_var, obj_var));
                  
-                return Ok((tmp, slice_ty));
+                Ok((tmp, slice_ty))
             }
             "as_ptr" => {
                 if args.len() != 1 { return Err(()); }
@@ -417,7 +417,7 @@ impl Codegen {
                 };
                 body.push_str(&format!("const {}* {} = {}.ptr;\n", 
                     inner_type.to_c_type(&self.arch, &mut self.type_registry), tmp, obj_var));
-                return Ok((tmp, Type::Ptr(Box::new(Type::Const(Box::new(inner_type))))));
+                Ok((tmp, Type::Ptr(Box::new(Type::Const(Box::new(inner_type))))))
             }
             "as_mut_ptr" => {
                 if args.len() != 1 { return Err(()); }
@@ -430,7 +430,7 @@ impl Codegen {
                 };
                 body.push_str(&format!("{}* {} = {}.ptr;\n", 
                     inner_type.to_c_type(&self.arch, &mut self.type_registry), tmp, obj_var));
-                return Ok((tmp, Type::MutRef(Box::new(inner_type))));
+                Ok((tmp, Type::MutRef(Box::new(inner_type))))
             }
 
             "to_string" => {
@@ -462,7 +462,7 @@ impl Codegen {
                     }
                 }
                 
-                return Ok((tmp, ty));
+                Ok((tmp, ty))
             }
             _ => {
                 self.codegen_std_call(func, args, body, loc)
@@ -606,13 +606,11 @@ impl Codegen {
         for (i, arg) in args.iter().enumerate() {
             let (mut var, ty) = self.codegen_expr(arg, body).check_error();
             
-            if let Some(params) = &param_types {
-                if let Some(param_ty) = params.get(i) {
-                    if (matches!(param_ty, Type::ConstStr) || matches!(param_ty, Type::Ptr(_) | Type::RawPtr(_) | Type::Ref(_) | Type::MutRef(_))) && matches!(ty, Type::Str { .. }) {
+            if let Some(params) = &param_types
+                && let Some(param_ty) = params.get(i)
+                    && (matches!(param_ty, Type::ConstStr) || matches!(param_ty, Type::Ptr(_) | Type::RawPtr(_) | Type::Ref(_) | Type::MutRef(_))) && matches!(ty, Type::Str { .. }) {
                         var = format!("{}.ptr", var);
                     }
-                }
-            }
             
             arg_vars.push(var);
         }
@@ -798,13 +796,12 @@ impl Codegen {
             "."
         };
 
-        if op == "+=" {
-            if let Type::Struct { name: struct_name } = struct_ty {
-                if let Some(struct_info) = self.structs.get(struct_name) {
-                    if let Some((_, field_ty, _)) = struct_info.fields.iter()
-                        .find(|(fname, _, _)| fname == field) 
-                    {
-                        if matches!(field_ty, Type::StdStr) {
+        if op == "+="
+            && let Type::Struct { name: struct_name } = struct_ty
+                && let Some(struct_info) = self.structs.get(struct_name)
+                    && let Some((_, field_ty, _)) = struct_info.fields.iter()
+                        .find(|(fname, _, _)| fname == field)
+                        && matches!(field_ty, Type::StdStr) {
                             match &val_ty {
                                 Type::StdStr => {
                                     body.push_str(&format!("String_extend(&{}{}{}, &{});\n", obj_var, access_op, field, val_var));
@@ -825,10 +822,6 @@ impl Codegen {
                             }
                             return Ok(());
                         }
-                    }
-                }
-            }
-        }
 
         body.push_str(&format!("{}{}{} {} {};\n", obj_var, access_op, field, op, val_var));
         Ok(())

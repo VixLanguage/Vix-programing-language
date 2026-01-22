@@ -80,14 +80,14 @@ void* __guard_eh_cont_table = 0;
 
         let stub_path = Path::new("cfg_stub.c");
         let obj_path = PathBuf::from("cfg_stub.obj");
-        let _ = fs::remove_file(&stub_path);
+        let _ = fs::remove_file(stub_path);
         let _ = fs::remove_file(&obj_path);
 
-        fs::write(&stub_path, stub_c).map_err(|e| format!("Failed to write CFG stub: {}", e))?;
+        fs::write(stub_path, stub_c).map_err(|e| format!("Failed to write CFG stub: {}", e))?;
 
         let mut cmd = Command::new("clang");
         cmd.arg("-c")
-            .arg(&stub_path)
+            .arg(stub_path)
             .arg("-o")
             .arg(&obj_path)
             .arg("-O2");
@@ -120,10 +120,10 @@ void* __guard_eh_cont_table = 0;
         };
         let c_path = Path::new("output.c");
 
-        fs::write(&c_path, c_code).map_err(|e| format!("Failed to write C source: {}", e))?;
+        fs::write(c_path, c_code).map_err(|e| format!("Failed to write C source: {}", e))?;
 
         cmd.arg("-c")
-            .arg(&c_path)
+            .arg(c_path)
             .arg("-o")
             .arg(&obj_path)
             .arg("-O2")
@@ -209,7 +209,7 @@ void* __guard_eh_cont_table = 0;
             None
         };
 
-        fs::write(&c_path, c_code).map_err(|e| format!("Failed to write C source: {}", e))?;
+        fs::write(c_path, c_code).map_err(|e| format!("Failed to write C source: {}", e))?;
 
         let mut cmd = Command::new("clang");
 
@@ -217,7 +217,7 @@ void* __guard_eh_cont_table = 0;
             cmd.arg(stub);
         }
 
-        cmd.arg(&c_path)
+        cmd.arg(c_path)
             .arg("-o")
             .arg(&exe_path)
             .arg("-O2")
@@ -254,7 +254,7 @@ void* __guard_eh_cont_table = 0;
     pub fn add_platform_specific_args(cmd: &mut Command, target_os: TargetOS) {
         match target_os {
             TargetOS::Windows => {
-                cmd.args(&[
+                cmd.args([
                     "-Xlinker", "/SUBSYSTEM:CONSOLE",
                     "-lmsvcrt",
                     "-lvcruntime",
@@ -264,17 +264,17 @@ void* __guard_eh_cont_table = 0;
                 ]);
             }
             TargetOS::Linux => {
-                cmd.args(&["-lpthread", "-ldl", "-lm"]);
+                cmd.args(["-lpthread", "-ldl", "-lm"]);
             }
             TargetOS::MacOS => {
-                cmd.args(&[
+                cmd.args([
                     "-framework", "CoreFoundation",
                     "-framework", "Security",
                     "-lpthread", "-lm"
                 ]);
             }
             TargetOS::FreeBSD => {
-                cmd.args(&["-lpthread", "-lm"]);
+                cmd.args(["-lpthread", "-lm"]);
             }
             TargetOS::Unknown => {}
         }

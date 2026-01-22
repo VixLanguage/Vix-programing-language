@@ -499,11 +499,7 @@ impl Codegen {
             "+" | "-" | "*" | "/" | "%" => {
                 if matches!((left, right), (Type::Int { .. }, Type::Int { .. }) | (Type::Float { .. }, Type::Float { .. })) {
                     true
-                } else if op == "+" && (matches!(left, Type::Str { .. } | Type::ConstStr) || matches!(right, Type::Str { .. } | Type::ConstStr)) {
-                    true
-                } else {
-                    false
-                }
+                } else { op == "+" && (matches!(left, Type::Str { .. } | Type::ConstStr) || matches!(right, Type::Str { .. } | Type::ConstStr)) }
             }
 
  

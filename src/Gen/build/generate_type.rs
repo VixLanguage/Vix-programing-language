@@ -10,7 +10,7 @@ impl Codegen {
                 char_c_type
             );
             self.ir.type_definitions.push_str(&typedef);
-            self.ir.type_definitions.push_str("\n");
+            self.ir.type_definitions.push('\n');
         }
     }
 

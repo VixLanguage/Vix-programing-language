@@ -2,27 +2,24 @@ use crate::import::*;
 
 impl Parser {
     pub fn parse_type_identifier(type_name: &str) -> Type {
-        if let Some(bits_str) = type_name.strip_prefix("int") {
-            if let Ok(bits) = bits_str.parse::<usize>() {
+        if let Some(bits_str) = type_name.strip_prefix("int")
+            && let Ok(bits) = bits_str.parse::<usize>() {
                 return Type::int(bits, true);
             }
-        }
 
         if type_name == "char" {
             return Type::char32();
         }
 
-        if let Some(bits_str) = type_name.strip_prefix("uint") {
-            if let Ok(bits) = bits_str.parse::<usize>() {
+        if let Some(bits_str) = type_name.strip_prefix("uint")
+            && let Ok(bits) = bits_str.parse::<usize>() {
                 return Type::int(bits, false);
             }
-        }
 
-        if let Some(bits_str) = type_name.strip_prefix("float") {
-            if let Ok(bits) = bits_str.parse::<usize>() {
+        if let Some(bits_str) = type_name.strip_prefix("float")
+            && let Ok(bits) = bits_str.parse::<usize>() {
                 return Type::float(bits);
             }
-        }
 
         Type::i32()
     }

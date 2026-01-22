@@ -175,7 +175,7 @@ impl Lexer {
         }
 
  
-        if self.current() == Some('.') && self.peek(1).map_or(false, |c| c.is_ascii_digit()) {
+        if self.current() == Some('.') && self.peek(1).is_some_and(|c| c.is_ascii_digit()) {
             num_str.push('.');
             self.advance();
             while let Some(ch) = self.current() {
@@ -277,7 +277,7 @@ impl Lexer {
         }
 
  
-        let is_type_ident = ident.chars().next().map_or(false, |c| c.is_lowercase()) &&
+        let is_type_ident = ident.chars().next().is_some_and(|c| c.is_lowercase()) &&
                            (ident.starts_with("int") || 
                             ident.starts_with("uint") || 
                             ident.starts_with("float")

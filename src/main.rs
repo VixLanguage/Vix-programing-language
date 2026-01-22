@@ -173,7 +173,7 @@ fn main() {
 
     let arch = ArchConfig::x86_64();
 
-    let mut combined_source = String::new();
+    let combined_source = String::new();
     let main_filename = source_files.first().map(|p| p.display().to_string()).unwrap_or_else(|| "main.vix".to_string());
 
     let mut combined_source_code = String::new();
@@ -187,7 +187,7 @@ fn main() {
     let tokens = lexer.tokenize();
     let parser = Parser::new(tokens, combined_source_code.clone(), lexer.spans.clone());
     let (program, all_structs, all_enums, all_externs, _, _, _, all_impls, _, _, _) = parser.parse();
-    let mut all_functions = program.functions;
+    let all_functions = program.functions;
     let all_constants = program.constants;
     let combined_source = combined_source_code;
     let all_modules = program.modules.clone();
@@ -291,11 +291,9 @@ fn main() {
             if should_run {
                 if target != current_os {
                     println!("\n{} Cannot run executable compiled for {} on {}", "Warning:".yellow(), target.display_name(), current_os.display_name());
-                } else {
-                    if let Err(e) = Clang::run_executable(output_name, Some(target)) {
-                        eprintln!("\n{} Runtime error: {}", "Error:".red(), e);
-                        std::process::exit(1);
-                    }
+                } else if let Err(e) = Clang::run_executable(output_name, Some(target)) {
+                    eprintln!("\n{} Runtime error: {}", "Error:".red(), e);
+                    std::process::exit(1);
                 }
             }
         }

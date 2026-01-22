@@ -6,6 +6,12 @@ pub struct ImportContext {
     pub symbol_imports: HashMap<String, String>,
 }   
 
+impl Default for ImportContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ImportContext {
     pub fn new() -> Self {
         ImportContext {
@@ -301,13 +307,11 @@ impl Parser {
                     let len_type = self.parse_type();
                     self.expect(Token::RightParen, vec![Token::Comma, Token::BitwiseOr]);
                     Type::Str { len_type: Box::new(len_type) }
-                        } else {
-                    if is_const {
-                        Type::ConstStr
-                        } else {
-                        Type::Str { len_type: Box::new(Type::i64()) }
-                    }
-                }
+                        } else if is_const {
+                            Type::ConstStr
+                            } else {
+                            Type::Str { len_type: Box::new(Type::i64()) }
+                        }
             }
             
             Token::BitwiseAnd => {
@@ -419,7 +423,8 @@ impl Parser {
 
     fn parse_primary(&mut self) -> Expr {
         let current = self.current();
-        let expr = match current {
+        
+        match current {
              Token::Plan => {
                 self.advance();
                 self.expect(Token::LeftParen, vec![Token::RightParen]);
@@ -659,7 +664,7 @@ impl Parser {
             Token::None => {self.advance();Expr::None}
             Token::Number(n) => { self.advance(); Expr::Number(n) }
             Token::Char(ch) => {  self.advance(); Expr::Char(ch) }
-            Token::Float(f) => { self.advance(); Expr::Float(f.into_inner() as f32) }
+            Token::Float(f) => { self.advance(); Expr::Float(f.into_inner()) }
             Token::HexNumber(n) => { self.advance(); Expr::HexNumber(n as i32) }
             Token::BinaryNumber(n) => { self.advance(); Expr::BinaryNumber(n as i32) }
             Token::OctalNumber(n) => { self.advance(); Expr::OctalNumber(n as i32) }
@@ -749,8 +754,7 @@ impl Parser {
                 self.advance();
                 Expr::Number(0)
             }
-        };
-        expr
+        }
     }
 
     fn parse_post(&mut self, mut expr: Expr) -> Expr {
@@ -1697,12 +1701,10 @@ impl Parser {
                         } else {
                     Type::Void
                 }
-            } else {
-                if name == "main" && !is_module {
-                Type::i32()
-                    } else {
-                    Type::Void
-                }
+            } else if name == "main" && !is_module {
+            Type::i32()
+                } else {
+                Type::Void
             };
        
         
@@ -1817,7 +1819,7 @@ impl Parser {
         let mut import_decls = Vec::new();
         let mut constants = Vec::new();
         let mut modules = Vec::new();
-        let mut stmts: Vec<Stmt> = Vec::new();  
+        let stmts: Vec<Stmt> = Vec::new();  
        
          
         while self.current() != Token::EOF {
@@ -1962,8 +1964,8 @@ impl Parser {
                     while !matches!(self.current(), Token::End | Token::EOF) {
                         let mut init_fields = Vec::new();        
                    
-                        if let Token::Identifier(name) = self.current() {
-                            if name == struct_name && self.peek(1) == Token::LeftParen {
+                        if let Token::Identifier(name) = self.current()
+                            && name == struct_name && self.peek(1) == Token::LeftParen {
                                 self.advance();
                                 self.advance();
                                 
@@ -1988,7 +1990,6 @@ impl Parser {
                                 constructor_body = Some(init_fields);
                                 continue;
                             }
-                        }
                         
                         let is_public = if self.current() == Token::Pub {
                             self.advance();
@@ -2043,8 +2044,8 @@ impl Parser {
                                 if self.current() == Token::Comma {
                                     self.advance();
                                 }
-                            } else if let Token::Identifier(s) = self.current() {
-                                if s == "brw" && self.peek(1) == Token::Selfish {
+                            } else if let Token::Identifier(s) = self.current()
+                                && s == "brw" && self.peek(1) == Token::Selfish {
                                     self.advance();
                                     self.advance();
 
@@ -2053,7 +2054,6 @@ impl Parser {
                                         self.advance();
                                     }
                                 }
-                            }
                                     
                             while self.current() != Token::RightParen && self.current() != Token::EOF {
                                 let modifier = match self.current() {
@@ -2102,11 +2102,9 @@ impl Parser {
                             
                             while !matches!(self.current(), Token::End | Token::Func | Token::EOF) {
                             
-                                if matches!(self.current(), Token::End) {
+                                if matches!(self.current(), Token::End | Token::Func) {
                                     break;
-                                } else if self.current() == Token::Func {
-                                    break;
-                                }
+                                } 
                                 
                                 body.push(self.parse_stmt());
                                 if self.current() == Token::Semicolon {
@@ -2578,15 +2576,14 @@ impl Parser {
                         continue;
                     }
                     
-                    if !defined.contains(name) {
-                        if !undefined.iter().any(|u| u.name == *name) {
+                    if !defined.contains(name)
+                        && !undefined.iter().any(|u| u.name == *name) {
                             undefined.push(UndefinedFunction {
                                 name: name.clone(),
                                 call_location: SourceSpan::from(0..0), 
                                 args_count: args.len(),
                             });
                         }
-                    }
                     
                     for arg in args {
                         self.expr_calls(arg, defined, undefined, import_context);
@@ -2649,15 +2646,14 @@ impl Parser {
                     return;
                 }
                 
-                if !defined.contains(name) {
-                    if !undefined.iter().any(|u| u.name == *name) {
+                if !defined.contains(name)
+                    && !undefined.iter().any(|u| u.name == *name) {
                         undefined.push(UndefinedFunction {
                             name: name.clone(),
                             call_location: SourceSpan::from(0..0),
                             args_count: args.len(),
                         });
                     }
-                }
                 for arg in args {
                     self.expr_calls(arg, defined, undefined, import_context);
                 }

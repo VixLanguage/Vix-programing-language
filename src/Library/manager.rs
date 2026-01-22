@@ -205,7 +205,7 @@ impl LibraryManager {
         ).map_err(|e| LibraryError::ParseError(format!("Codegen failed: {}", e)))?;
 
         Clang::compile_to_object(&c_code, output_path, target_os)
-            .map_err(|e| LibraryError::ParseError(e))?;
+            .map_err(LibraryError::ParseError)?;
 
         Ok(())
     }
@@ -519,19 +519,17 @@ impl LibraryManager {
                             match &tokens[i] {
                                 Token::Func => {
                                     i += 1;
-                                    if i < tokens.len() {
-                                        if let Token::Identifier(name) = &tokens[i] {
+                                    if i < tokens.len()
+                                        && let Token::Identifier(name) = &tokens[i] {
                                             functions.push(name.clone());
                                         }
-                                    }
                                 }
                                 Token::Struct => {
                                     i += 1;
-                                    if i < tokens.len() {
-                                        if let Token::Identifier(name) = &tokens[i] {
+                                    if i < tokens.len()
+                                        && let Token::Identifier(name) = &tokens[i] {
                                             classes.push(name.clone());
                                         }
-                                    }
                                 }
                                 _ => {}
                             }
@@ -539,13 +537,11 @@ impl LibraryManager {
                     }
                     Token::Impl => {
                         i += 1;
-                        if i < tokens.len() {
-                            if let Token::Identifier(name) = &tokens[i] {
-                                if !classes.contains(name) {
+                        if i < tokens.len()
+                            && let Token::Identifier(name) = &tokens[i]
+                                && !classes.contains(name) {
                                     classes.push(name.clone());
                                 }
-                            }
-                        }
                     }
                     _ => {}
                 }
@@ -567,23 +563,21 @@ impl LibraryManager {
             if tokens[i] == Token::Import {
                 i += 1;
 
-                if i < tokens.len() {
-                    if let Token::Identifier(symbol) = &tokens[i] {
+                if i < tokens.len()
+                    && let Token::Identifier(symbol) = &tokens[i] {
                         let symbol_name = symbol.clone();
                         i += 1;
 
                         if i < tokens.len() && tokens[i] == Token::From {
                             i += 1;
-                            if i < tokens.len() {
-                                if let Token::Identifier(lib) = &tokens[i] {
+                            if i < tokens.len()
+                                && let Token::Identifier(lib) = &tokens[i] {
                                     imports.push((lib.clone(), Some(symbol_name)));
                                 }
-                            }
                         } else {
                             imports.push((symbol_name, None));
                         }
                     }
-                }
             }
             i += 1;
         }
@@ -670,8 +664,8 @@ impl LibraryManager {
                     println!("      {} Scanning public module: {}", "→".bright_black(), module_name);
                     
                     for stmt in body {
-                        if let Stmt::Function(func) = stmt {
-                            if func.is_public {
+                        if let Stmt::Function(func) = stmt
+                            && func.is_public {
                                  
                                 let prefixed_name = format!("{}_{}", module_name, func.name);
                                 
@@ -691,7 +685,6 @@ impl LibraryManager {
                                 
                                 println!("         {} Module function: {} -> {}", "✓".green(), prefixed_name, return_type);
                             }
-                        }
                     }
                 }
             }

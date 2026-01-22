@@ -64,8 +64,8 @@ impl Codegen {
 
 
     pub fn codegen_typed_declaration_impl(&mut self, name: &str, ty: &Type, value: &Expr, body: &mut String, loc: SourceLocation, is_mutable: bool) -> Result<(), ()> {
-            if matches!(ty, Type::StdStr) {
-                if let Expr::String(s) = value {
+            if matches!(ty, Type::StdStr)
+                && let Expr::String(s) = value {
                     let c_name = format!("var_{}", name);
                     
                     if s.is_empty() {
@@ -85,7 +85,6 @@ impl Codegen {
                         return Ok(());
                     }
                 }
-            }
 
         
         if let Type::Union { variants } = ty {
@@ -209,13 +208,11 @@ impl Codegen {
                             
                             self.diagnostics.error(
                                 "TypeMismatch",
-                                &format!("Cannot assign String[] to str[]. Elements must be converted explicitly."),
+                                "Cannot assign String[] to str[]. Elements must be converted explicitly.",
                                 ErrorContext {
                                     primary_location: loc.clone(),
                                     secondary_locations: vec![],
-                                    help_message: Some(format!(
-                                        "Use .as_str() to convert String to str:\n    arr += [x.as_str()]"
-                                    )),
+                                    help_message: Some("Use .as_str() to convert String to str:\n    arr += [x.as_str()]".to_string()),
                                     suggestions: vec![
                                         "Convert String elements to str using .as_str()".to_string(),
                                     ],
@@ -228,7 +225,7 @@ impl Codegen {
                         (Type::StdStr, Type::Str { .. }) => {
                             self.diagnostics.error(
                                 "TypeMismatch",
-                                &format!("Cannot assign String to str[]. Expected array."),
+                                "Cannot assign String to str[]. Expected array.",
                                 ErrorContext {
                                     primary_location: loc.clone(),
                                     secondary_locations: vec![],
@@ -552,60 +549,51 @@ impl Codegen {
         match &method.return_type {
             Type::Result { ok, err } => {
                 
-                if let Type::Tuple { fields } = ok.as_ref() {
-                    if let Some(tuple_def) = self.type_registry.generate_tuple_definition(fields, &self.config.arch) {
-                        if !self.ir.forward_decls.contains(&tuple_def) {
+                if let Type::Tuple { fields } = ok.as_ref()
+                    && let Some(tuple_def) = self.type_registry.generate_tuple_definition(fields, &self.config.arch)
+                        && !self.ir.forward_decls.contains(&tuple_def) {
                             self.ir.forward_decls.push_str(&tuple_def);
-                            self.ir.forward_decls.push_str("\n");
+                            self.ir.forward_decls.push('\n');
                         }
-                    }
-                }
                 
                 
-                if let Type::Tuple { fields } = err.as_ref() {
-                    if let Some(tuple_def) = self.type_registry.generate_tuple_definition(fields, &self.config.arch) {
-                        if !self.ir.forward_decls.contains(&tuple_def) {
+                if let Type::Tuple { fields } = err.as_ref()
+                    && let Some(tuple_def) = self.type_registry.generate_tuple_definition(fields, &self.config.arch)
+                        && !self.ir.forward_decls.contains(&tuple_def) {
                             self.ir.forward_decls.push_str(&tuple_def);
-                            self.ir.forward_decls.push_str("\n");
+                            self.ir.forward_decls.push('\n');
                         }
-                    }
-                }
                 
                 
-                if let Some(result_def) = self.type_registry.generate_result_definition(ok, err, &self.config.arch) {
-                    if !self.ir.forward_decls.contains(&result_def) {
+                if let Some(result_def) = self.type_registry.generate_result_definition(ok, err, &self.config.arch)
+                    && !self.ir.forward_decls.contains(&result_def) {
                         self.ir.forward_decls.push_str(&result_def);
-                        self.ir.forward_decls.push_str("\n");
+                        self.ir.forward_decls.push('\n');
                     }
-                }
             }
             Type::Option { inner } => {
                 
-                if let Type::Tuple { fields } = inner.as_ref() {
-                    if let Some(tuple_def) = self.type_registry.generate_tuple_definition(fields, &self.config.arch) {
-                        if !self.ir.forward_decls.contains(&tuple_def) {
+                if let Type::Tuple { fields } = inner.as_ref()
+                    && let Some(tuple_def) = self.type_registry.generate_tuple_definition(fields, &self.config.arch)
+                        && !self.ir.forward_decls.contains(&tuple_def) {
                             self.ir.forward_decls.push_str(&tuple_def);
-                            self.ir.forward_decls.push_str("\n");
+                            self.ir.forward_decls.push('\n');
                         }
-                    }
-                }
                 
                 
-                if let Some(option_def) = self.type_registry.generate_option_definition(inner, &self.config.arch) {
-                    if !self.ir.forward_decls.contains(&option_def) {
+                if let Some(option_def) = self.type_registry.generate_option_definition(inner, &self.config.arch)
+                    && !self.ir.forward_decls.contains(&option_def) {
                         self.ir.forward_decls.push_str(&option_def);
-                        self.ir.forward_decls.push_str("\n");
+                        self.ir.forward_decls.push('\n');
                     }
-                }
             }
             Type::Tuple { fields } => {
                 
-                if let Some(tuple_def) = self.type_registry.generate_tuple_definition(fields, &self.config.arch) {
-                    if !self.ir.forward_decls.contains(&tuple_def) {
+                if let Some(tuple_def) = self.type_registry.generate_tuple_definition(fields, &self.config.arch)
+                    && !self.ir.forward_decls.contains(&tuple_def) {
                         self.ir.forward_decls.push_str(&tuple_def);
-                        self.ir.forward_decls.push_str("\n");
+                        self.ir.forward_decls.push('\n');
                     }
-                }
             }
             _ => {}
         }
@@ -659,24 +647,21 @@ impl Codegen {
         
         let mut body_code = String::new();
         for (i, stmt) in method.body.iter().enumerate() {
-            if i == method.body.len() - 1 && !matches!(method.return_type, Type::Void) {
-                if let Stmt::Expr(expr) = stmt {
-                    if let Ok((res_var, _)) = self.codegen_expr(expr, &mut body_code) {
+            if i == method.body.len() - 1 && !matches!(method.return_type, Type::Void)
+                && let Stmt::Expr(expr) = stmt
+                    && let Ok((res_var, _)) = self.codegen_expr(expr, &mut body_code) {
                         body_code.push_str(&format!("    return {};\n", res_var));
                         continue;
                     }
-                }
-            }
             let _ = self.codegen_stmt(stmt, &mut body_code);
         }
         func_code.push_str(&body_code);
         
         
-        if matches!(method.return_type, Type::Void) {
-            if !body_code.contains("return") {
+        if matches!(method.return_type, Type::Void)
+            && !body_code.contains("return") {
                 func_code.push_str("    return;\n");
             }
-        }
         
         func_code.push_str("}\n\n");
         
@@ -739,25 +724,22 @@ impl Codegen {
         func_code.push_str(") {\n");
 
         for (i, stmt) in func.body.iter().enumerate() {
-            if i == func.body.len() - 1 && !matches!(func.return_type, Type::Void) {
-                if let Stmt::Expr(expr) = stmt {
-                    if let Ok((res_var, _)) = self.codegen_expr(expr, &mut body_code) {
+            if i == func.body.len() - 1 && !matches!(func.return_type, Type::Void)
+                && let Stmt::Expr(expr) = stmt
+                    && let Ok((res_var, _)) = self.codegen_expr(expr, &mut body_code) {
                         body_code.push_str(&format!("    return {};\n", res_var));
                         continue;
                     }
-                }
-            }
             self.codegen_stmt(stmt, &mut body_code).ok();
         }
 
         self.current_return_type = None;
         func_code.push_str(&body_code);
 
-        if matches!(func.return_type, Type::Void) {
-            if !body_code.contains("return") {
+        if matches!(func.return_type, Type::Void)
+            && !body_code.contains("return") {
                 func_code.push_str("    return;\n");
             }
-        }
 
         func_code.push_str("}\n\n");
         self.ir.functions.push_str(&func_code);
@@ -1006,7 +988,7 @@ impl Codegen {
             Expr::ResultOk(inner) => {
                 println!("[DEBUG] Pattern is ResultOk");
                 if let Expr::Var(binding_name) = inner.as_ref() {
-                    self.codegen_if_let_ok_pattern(&vec![Expr::Var(binding_name.clone())], &val_var, &val_ty, then_block, else_block, body)
+                    self.codegen_if_let_ok_pattern(&[Expr::Var(binding_name.clone())], &val_var, &val_ty, then_block, else_block, body)
                 } else {
                     eprintln!("[ERROR] ResultOk pattern argument must be a variable");
                     Err(())
@@ -1015,16 +997,16 @@ impl Codegen {
             Expr::ResultErr(inner) => {
                 println!("[DEBUG] Pattern is ResultErr");
                 if let Expr::Var(binding_name) = inner.as_ref() {
-                    self.codegen_if_let_err_pattern(&vec![Expr::Var(binding_name.clone())], &val_var, &val_ty, then_block, else_block, body)
+                    self.codegen_if_let_err_pattern(&[Expr::Var(binding_name.clone())], &val_var, &val_ty, then_block, else_block, body)
                 } else {
                     eprintln!("[ERROR] ResultErr pattern argument must be a variable");
-                    return Err(());
+                    Err(())
                 }
             }
             Expr::Some(inner) => {
                 println!("[DEBUG] Pattern is Some");
                 if let Expr::Var(binding_name) = inner.as_ref() {
-                    self.codegen_if_let_some_pattern(&vec![Expr::Var(binding_name.clone())], &val_var, &val_ty, then_block, else_block, body)
+                    self.codegen_if_let_some_pattern(&[Expr::Var(binding_name.clone())], &val_var, &val_ty, then_block, else_block, body)
                 } else {
                     eprintln!("[ERROR] Some pattern argument must be a variable");
                     Err(())
@@ -1081,7 +1063,7 @@ impl Codegen {
             self.codegen_stmt(stmt, body)?;
         }
         
-        body.push_str("}");
+        body.push('}');
         
         
         if let Some(else_stmts) = else_block {
@@ -1089,10 +1071,10 @@ impl Codegen {
             for stmt in else_stmts {
                 self.codegen_stmt(stmt, body)?;
             }
-            body.push_str("}");
+            body.push('}');
         }
         
-        body.push_str("\n");
+        body.push('\n');
         Ok(())
     }
 
@@ -1133,17 +1115,17 @@ impl Codegen {
             self.codegen_stmt(stmt, body)?;
         }
         
-        body.push_str("}");
+        body.push('}');
         
         if let Some(else_stmts) = else_block {
             body.push_str(" else {\n");
             for stmt in else_stmts {
                 self.codegen_stmt(stmt, body)?;
             }
-            body.push_str("}");
+            body.push('}');
         }
         
-        body.push_str("\n");
+        body.push('\n');
         Ok(())
     }
 
@@ -1184,17 +1166,17 @@ impl Codegen {
             self.codegen_stmt(stmt, body)?;
         }
         
-        body.push_str("}");
+        body.push('}');
         
         if let Some(else_stmts) = else_block {
             body.push_str(" else {\n");
             for stmt in else_stmts {
                 self.codegen_stmt(stmt, body)?;
             }
-            body.push_str("}");
+            body.push('}');
         }
         
-        body.push_str("\n");
+        body.push('\n');
         Ok(())
     }
 }

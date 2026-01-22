@@ -112,7 +112,7 @@ impl Codegen {
 
             if !self.ir.type_definitions.contains(&typedef) {
                 self.ir.type_definitions.push_str(&typedef);
-                self.ir.type_definitions.push_str("\n");
+                self.ir.type_definitions.push('\n');
             }
         }
 
@@ -142,12 +142,11 @@ impl Codegen {
         _ => {}
     }
 
-    if let Some(def) = self.type_registry.generate_type_definition(ty, &self.arch) {
-        if !self.ir.type_definitions.contains(&def) {
+    if let Some(def) = self.type_registry.generate_type_definition(ty, &self.arch)
+        && !self.ir.type_definitions.contains(&def) {
             self.ir.type_definitions.push_str(&def);
-            self.ir.type_definitions.push_str("\n");
+            self.ir.type_definitions.push('\n');
         }
-    }
 }
 
     fn make_location(&self, span: &SourceSpan) -> SourceLocation {
@@ -353,11 +352,10 @@ impl Codegen {
                     _ => false,
                 };
 
-                if is_hashmap {
-                    if indices.len() == 1 {
+                if is_hashmap
+                    && indices.len() == 1 {
                         return self.codegen_hashmap_get(arr, &indices[0], body);
                     }
-                }
     
                 self.codegen_index(arr, indices, body)
             }
@@ -427,12 +425,11 @@ impl Codegen {
                     value: Box::new(val_ty.clone()) 
                 };
                 
-                if let Some(def) = self.type_registry.generate_hashmap_definition(&key_ty, &val_ty, &self.arch) {
-                    if !self.ir.forward_decls.contains(&def) {
+                if let Some(def) = self.type_registry.generate_hashmap_definition(&key_ty, &val_ty, &self.arch)
+                    && !self.ir.forward_decls.contains(&def) {
                         self.ir.forward_decls.push_str(&def);
-                        self.ir.forward_decls.push_str("\n");
+                        self.ir.forward_decls.push('\n');
                     }
-                }
                 
                 let hashmap_name = format!("HashMap_{}_{}", 
                     key_ty.name().replace(" ", "_"), 
@@ -536,14 +533,14 @@ pub fn codegen_library(
     
      
     for struct_def in structs {
-        if let Err(_) = self.codegen_struct_definition(struct_def) {
+        if self.codegen_struct_definition(struct_def).is_err() {
             eprintln!("   {} Failed to generate struct: {}", "Error:".red(), struct_def.name);
         }
     }
 
     println!("   {} Generating enum definitions...", "→".bright_black());
     for enum_def in enums {
-        if let Err(_) = self.codegen_enum_definition(enum_def) {
+        if self.codegen_enum_definition(enum_def).is_err() {
             eprintln!("   {} Failed to generate enum: {}", "Error:".red(), enum_def.name);
         }
     }
@@ -554,7 +551,7 @@ pub fn codegen_library(
         if let Stmt::ModuleDef { name, .. } = module {
             println!("      {} Processing module: {}", "→".bright_black(), name);
         }
-        if let Err(_) = self.codegen_module(module) {
+        if self.codegen_module(module).is_err() {
             eprintln!("   {} Failed to generate module", "Error:".red());
         }
     }
@@ -586,7 +583,7 @@ pub fn codegen_library(
         let _ = self.codegen_impl_block(impl_block, true);
     }
 
-    if let Err(_) = self.codegen_externs(externs) {
+    if self.codegen_externs(externs).is_err() {
         eprintln!("   {} Failed to generate externs", "Error:".red());
     }
 
@@ -662,7 +659,7 @@ pub fn codegen_library(
                 param_str
             );
             self.ir.forward_decls.push_str(&c_decl);
-            self.ir.forward_decls.push_str("\n");
+            self.ir.forward_decls.push('\n');
             
              
              
@@ -698,7 +695,7 @@ pub fn codegen_library(
 
         println!("   {} Processing modules...", "processing:".bright_black());
         for module in &program.modules {
-            if let Err(_) = self.codegen_module(module) {
+            if self.codegen_module(module).is_err() {
             }
         }
 
@@ -727,8 +724,7 @@ pub fn codegen_library(
             let _ = self.codegen_impl_block(impl_block, true);
         }
 
-        if let Err(_) = self.codegen_externs(externs) {
-        }
+        self.codegen_externs(externs).is_err();
 
         println!("   {} Generating function code...", "processing:".bright_black());
         for func in &program.functions {

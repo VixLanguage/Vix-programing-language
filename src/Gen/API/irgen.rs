@@ -29,37 +29,37 @@ impl IR {
          
         if !self.headers.is_empty() {
             output.push_str(&self.headers);
-            output.push_str("\n");
+            output.push('\n');
         }
         
          
         if !self.type_definitions.is_empty() {
             output.push_str(&self.type_definitions);
-            output.push_str("\n");
+            output.push('\n');
         }
         
          
         if !self.forward_decls.is_empty() {
             output.push_str(&self.forward_decls);
-            output.push_str("\n");
+            output.push('\n');
         }
 
          
         if !self.function_decls.is_empty() {
             output.push_str(&self.function_decls);
-            output.push_str("\n");
+            output.push('\n');
         }
 
          
         if !self.helper_functions.is_empty() {
             output.push_str(&self.helper_functions);
-            output.push_str("\n");
+            output.push('\n');
         }
 
          
         if !self.functions.is_empty() {
             output.push_str(&self.functions);
-            output.push_str("\n");
+            output.push('\n');
         }
 
          
@@ -75,7 +75,7 @@ impl IR {
         if !self.forward_decls.contains(&decl) {
             self.forward_decls.push_str(&decl);
             if !decl.ends_with('\n') {
-                self.forward_decls.push_str("\n");
+                self.forward_decls.push('\n');
             }
         }
     }
@@ -104,7 +104,7 @@ impl IR {
         if self.added_typedefs.insert(type_key) {
             self.type_definitions.push_str(&typedef);
             if !typedef.ends_with('\n') {
-                self.type_definitions.push_str("\n");
+                self.type_definitions.push('\n');
             }
         }
     }
@@ -115,7 +115,7 @@ impl IR {
         if self.added_function_decls.insert(normalized.clone()) {
             self.function_decls.push_str(&decl);
             if !decl.ends_with('\n') {
-                self.function_decls.push_str("\n");
+                self.function_decls.push('\n');
             }
         }
     }
@@ -123,7 +123,7 @@ impl IR {
     pub fn add_function(&mut self, func: String) {
         self.functions.push_str(&func);
         if !func.ends_with('\n') {
-            self.functions.push_str("\n");
+            self.functions.push('\n');
         }
     }
 
@@ -131,7 +131,7 @@ impl IR {
         if !self.helper_functions.contains(func_name) {
             self.helper_functions.push_str(&func_def);
             if !func_def.ends_with('\n') {
-                self.helper_functions.push_str("\n");
+                self.helper_functions.push('\n');
             }
         }
     }

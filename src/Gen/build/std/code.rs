@@ -99,13 +99,11 @@ int x_random(int max) {
         for (i, arg) in args.iter().enumerate() {
             let (mut var, ty) = self.codegen_expr(arg, body).check_error();
 
-            if let Some(params) = &param_types {
-                if let Some(param_ty) = params.get(i) {
-                    if matches!(param_ty, Type::ConstStr) && matches!(ty, Type::Str { .. }) {
+            if let Some(params) = &param_types
+                && let Some(param_ty) = params.get(i)
+                    && matches!(param_ty, Type::ConstStr) && matches!(ty, Type::Str { .. }) {
                         var = format!("{}.ptr", var);
                     }
-                }
-            }
 
             arg_vars.push(var);
         }

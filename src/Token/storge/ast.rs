@@ -453,26 +453,20 @@ pub struct CodegenConfig {
     pub debug_info: bool,
 }
 
-impl Default for OptimizationLevel {
-    fn default() -> Self {
-        OptimizationLevel::None
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default)]
 pub enum CompilationMode {
+    #[default]
     Executable,
     Library,
 }
 
-impl Default for CompilationMode {
-    fn default() -> Self {
-        CompilationMode::Executable
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Default)]
 pub enum OptimizationLevel {
+    #[default]
     None,
     O1,
     O2,

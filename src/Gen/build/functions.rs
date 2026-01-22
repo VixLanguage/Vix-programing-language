@@ -263,12 +263,11 @@ impl Codegen {
         let slice_tmp = self.fresh_var();
         let slice_type_name = self.type_registry.generate_slices(&elem_type, &self.arch);
         
-        if let Some(typedef) = self.type_registry.get_slice_typedef(&elem_type) {
-            if !self.ir.forward_decls.contains(&typedef) {
+        if let Some(typedef) = self.type_registry.get_slice_typedef(&elem_type)
+            && !self.ir.forward_decls.contains(&typedef) {
                 self.ir.forward_decls.push_str(&typedef);
-                self.ir.forward_decls.push_str("\n");
+                self.ir.forward_decls.push('\n');
             }
-        }
         
         body.push_str(&format!("{} {} = {{ .ptr = {}, .len = {} }};\n", 
             slice_type_name, slice_tmp, tmp, elements.len()));
@@ -418,12 +417,11 @@ impl Codegen {
         }
         
          
-        if let Some(tuple_def) = self.type_registry.generate_tuple_definition(&element_types, &self.config.arch) {
-            if !self.ir.forward_decls.contains(&tuple_def) {
+        if let Some(tuple_def) = self.type_registry.generate_tuple_definition(&element_types, &self.config.arch)
+            && !self.ir.forward_decls.contains(&tuple_def) {
                 self.ir.forward_decls.push_str(&tuple_def);
-                self.ir.forward_decls.push_str("\n");
+                self.ir.forward_decls.push('\n');
             }
-        }
         
         let tuple_type = Type::Tuple { fields: element_types.clone() };
         let c_type = tuple_type.to_c_type(&self.arch, &mut self.type_registry);
@@ -827,12 +825,11 @@ impl Codegen {
             }
         };
 
-         if let Some(def) = self.type_registry.generate_type_definition(&result_type, &self.arch) {
-            if !self.ir.forward_decls.contains(&def) {
+         if let Some(def) = self.type_registry.generate_type_definition(&result_type, &self.arch)
+            && !self.ir.forward_decls.contains(&def) {
                 self.ir.forward_decls.push_str(&def);
-                self.ir.forward_decls.push_str("\n");
+                self.ir.forward_decls.push('\n');
             }
-        }
         
 
         if let Some(def) = self.type_registry.generate_type_definition(&result_type, &self.arch) {
@@ -841,15 +838,14 @@ impl Codegen {
 
         let c_type = result_type.to_c_type(&self.arch, &mut self.type_registry);
 
-        if let Type::Result { ok, .. } = &result_type {
-            if !self.types_compatible(ok, &val_ty) {
+        if let Type::Result { ok, .. } = &result_type
+            && !self.types_compatible(ok, &val_ty) {
                 self.diagnostics.error(
                     "TypeMismatch",
                     &format!("Cannot return {} in Result with OK type {}", val_ty.name(), ok.name()),
                     type_mismatch_error(&ok.name(), &val_ty.name(), value.location(), value.location())
                 );
             }
-        }
 
         body.push_str(&format!("{} {} = {{ .tag = 0, .data = {{ .ok = {} }} }};\n", 
             c_type, tmp, val_var));
@@ -876,15 +872,14 @@ impl Codegen {
         
         let c_type = result_type.to_c_type(&self.arch, &mut self.type_registry);
         
-        if let Type::Result { err, .. } = &result_type {
-            if !self.types_compatible(err, &val_ty) {
+        if let Type::Result { err, .. } = &result_type
+            && !self.types_compatible(err, &val_ty) {
                 self.diagnostics.error(
                     "TypeMismatch",
                     &format!("Cannot return {} in Result with ERR type {}", val_ty.name(), err.name()),
                     type_mismatch_error(&err.name(), &val_ty.name(), value.location(), value.location())
                 );
             }
-        }
 
         body.push_str(&format!("{} {} = {{ .tag = 1, .data = {{ .err = {} }} }};\n", 
             c_type, tmp, val_var));

@@ -19,6 +19,12 @@ pub struct EnumDefinition {
     pub is_public: bool,
 }
 
+impl Default for TypeRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeRegistry {
     pub fn new() -> Self {
         Self {
@@ -64,9 +70,9 @@ static inline unsigned int hash_{HM}({KT} key) {{
         };
         
         let key_compare = if is_string_key {
-            format!("(map->entries[index].key.len == key.len && memcmp(map->entries[index].key.ptr, key.ptr, key.len) == 0)")
+            "(map->entries[index].key.len == key.len && memcmp(map->entries[index].key.ptr, key.ptr, key.len) == 0)".to_string()
         } else {
-            format!("memcmp(&map->entries[index].key, &key, sizeof(key)) == 0")
+            "memcmp(&map->entries[index].key, &key, sizeof(key)) == 0".to_string()
         };
         
         Some(format!(
@@ -150,14 +156,14 @@ pub fn generate_enum_definition(&mut self, name: &str, arch: &ArchConfig) -> Opt
         }
     }
     
-    let mut def = format!("typedef enum {{\n");
+    let mut def = "typedef enum {\n".to_string();
     
     for (i, (variant_name, _)) in variants.iter().enumerate() {
         def.push_str(&format!("    {}__{} = {},\n", name, variant_name, i));
     }
     
     def.push_str(&format!("}} {}Tag;\n\n", name));
-    def.push_str(&format!("typedef struct {{\n"));
+    def.push_str("typedef struct {\n");
     def.push_str(&format!("    {}Tag tag;\n", name));
     def.push_str("    union {\n");
     
@@ -168,7 +174,7 @@ pub fn generate_enum_definition(&mut self, name: &str, arch: &ArchConfig) -> Opt
                 _ => ty
             };
             
-            let c_type = actual_type.to_c_type(&arch, self);
+            let c_type = actual_type.to_c_type(arch, self);
             def.push_str(&format!("        {} {};\n", c_type, variant_name));
         }
     }
@@ -184,7 +190,7 @@ pub fn generate_enum_definition(&mut self, name: &str, arch: &ArchConfig) -> Opt
     
     pub fn get_struct_size(&self, name: &str, arch: &ArchConfig) -> Option<usize> {
         self.struct_definitions.get(name).map(|def| {
-            def.fields.iter().map(|(_, ty)| (ty.size_bits(arch) + 7) / 8).sum()
+            def.fields.iter().map(|(_, ty)| ty.size_bits(arch).div_ceil(8)).sum()
         })
     }
 
@@ -275,7 +281,7 @@ pub fn generate_enum_definition(&mut self, name: &str, arch: &ArchConfig) -> Opt
             return None;
         }
         
-        let mut def = format!("typedef struct {{\n");
+        let mut def = "typedef struct {\n".to_string();
         
         for (i, field) in fields.iter().enumerate() {
             let field_c = field.to_c_type(arch, self);
@@ -425,11 +431,9 @@ pub fn generate_enum_definition(&mut self, name: &str, arch: &ArchConfig) -> Opt
             if c.is_alphanumeric() {
                 result.push(c);
                 last_was_underscore = false;
-            } else {
-                if !last_was_underscore {
-                    result.push('_');
-                    last_was_underscore = true;
-                }
+            } else if !last_was_underscore {
+                result.push('_');
+                last_was_underscore = true;
             }
         }
         result.trim_matches('_').to_string()
@@ -535,7 +539,7 @@ impl Type {
             Type::Void => "void".to_string(),
             Type::Ptr(inner) => format!("{}*", inner.to_c_type(arch, registry)),
             Type::RawPtr(inner) => format!("{}*", inner.to_c_type(arch, registry)),
-            Type::ConstStr { .. } => registry.generate_slices(&Type::char8(), arch),
+            Type::ConstStr => registry.generate_slices(&Type::char8(), arch),
             Type::Str { .. } => registry.generate_slices(&Type::char8(), arch),
             Type::StrSlice { char_type, .. } => registry.generate_slices(char_type, arch),
             Type::Struct { name } => name.clone(),
