@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use crate::import::*;
 
 pub struct TypeRegistry {
-    generated_types: HashMap<String, String>,
+    pub generated_types: HashMap<String, String>,
     pub ordered_definitions: Vec<String>,
-    struct_definitions: HashMap<String, StructDefinition>,
-    enum_definitions: HashMap<String, EnumDefinition>,
+    pub struct_definitions: HashMap<String, StructDefinition>,
+    pub enum_definitions: HashMap<String, EnumDefinition>,
 }
 
 pub struct StructDefinition {
@@ -243,6 +243,7 @@ pub fn generate_enum_definition(&mut self, name: &str, arch: &ArchConfig) -> Opt
         );
         
         self.generated_types.insert(type_id.clone(), def.clone());
+        println!("pushhing: {}", def.clone());
         self.ordered_definitions.push(def);
         type_id
     }
@@ -275,8 +276,6 @@ pub fn generate_enum_definition(&mut self, name: &str, arch: &ArchConfig) -> Opt
      
     pub fn generate_tuple_definition(&mut self, fields: &[Type], arch: &ArchConfig) -> Option<String> {
         let type_id = self.get_tuple_type_id(fields);
-        
-         
         if self.generated_types.contains_key(&type_id) {
             return None;
         }
@@ -295,7 +294,7 @@ pub fn generate_enum_definition(&mut self, name: &str, arch: &ArchConfig) -> Opt
         Some(def)
     }
 
-    pub fn get_union_type_name(&self, variants: &[Type], arch: &ArchConfig) -> String {
+    pub fn get_union_type_name(&self, variants: &[Type], _arch: &ArchConfig) -> String {
         let mut parts = Vec::new();
         
         for variant in variants {
@@ -397,7 +396,7 @@ pub fn generate_enum_definition(&mut self, name: &str, arch: &ArchConfig) -> Opt
                 self.generated_types.insert(type_id.clone(), def.clone());
                 Some(def)
             }
-            
+
             _ => None,
         }
     }
@@ -477,7 +476,6 @@ impl Type {
     pub fn is_sized_array(&self) -> bool {
         matches!(self, Type::Array { size: Some(_), .. })
     }
-    
     pub fn array_size(&self) -> Option<usize> {
         match self {
             Type::Array { size, .. } => *size,
@@ -503,6 +501,9 @@ impl Type {
 
     pub fn to_c_type(&self, arch: &ArchConfig, registry: &mut TypeRegistry) -> String {
         match self {
+             
+            Type::Int { bits: 64, signed: false } => "size_t".to_string(),
+            
             Type::Int { bits, signed } => match (bits, signed) {
                 (8, true) => "int8_t".to_string(),
                 (16, true) => "int16_t".to_string(),
@@ -512,7 +513,6 @@ impl Type {
                 (8, false) => "uint8_t".to_string(),
                 (16, false) => "uint16_t".to_string(),
                 (32, false) => "uint32_t".to_string(),
-                (64, false) => "uint64_t".to_string(),
                 (128, false) => "unsigned __int128".to_string(),
                 (b, true) => format!("int{}_t", b),
                 (b, false) => format!("uint{}_t", b),
@@ -556,18 +556,12 @@ impl Type {
                 format!("{}*", inner.to_c_type(arch, registry))
             }
             Type::FnPtr { params, return_type } => {
-                let param_types: Vec<String> = params.iter()
-                    .map(|p| p.to_c_type(arch, registry))
-                    .collect();
-                format!("{} (*)({})", 
-                    return_type.to_c_type(arch, registry), 
-                    param_types.join(", "))
+                let param_types: Vec<String> = params.iter().map(|p| p.to_c_type(arch, registry)).collect();
+                format!("{} (*)({})", return_type.to_c_type(arch, registry), param_types.join(", "))
             },
             
             Type::Tuple { fields } => {
-                let names: Vec<String> = fields.iter()
-                    .map(|f| TypeRegistry::sanitize_type_name(&f.name()))
-                    .collect();
+                let names: Vec<String> = fields.iter().map(|f| TypeRegistry::sanitize_type_name(&f.name())).collect();
                 format!("Tuple_{}", names.join("_"))
             }
             
@@ -576,20 +570,11 @@ impl Type {
                 format!("Union_{}", variant_names.join("_"))
             }
             
-            Type::Option { inner } => {
-                format!("Option_{}", TypeRegistry::sanitize_type_name(&inner.name()))
-            }
-            Type::Result { ok, err } => {
-                format!("Result_{}_{}", 
-                    TypeRegistry::sanitize_type_name(&ok.name()), 
-                    TypeRegistry::sanitize_type_name(&err.name()))
-            }
-            Type::Const(innerg) => {
-                format!("const {}", innerg.to_c_type(arch, registry))
-            }
-            
+            Type::Option { inner } => {format!("Option_{}", TypeRegistry::sanitize_type_name(&inner.name()))}
+            Type::Result { ok, err } => {format!("Result_{}_{}", TypeRegistry::sanitize_type_name(&ok.name()), TypeRegistry::sanitize_type_name(&err.name()))}
+            Type::Const(innerg) => {format!("const {}", innerg.to_c_type(arch, registry))}
             Type::StdStr => "String".to_string(),
-            
+            Type::Usize => "size_t".to_string(),
             Type::Auto => panic!("Auto type must be resolved before codegen"),
         }
     }
@@ -623,6 +608,7 @@ impl Type {
                 let max_data = variants.iter().map(|v| v.size_bits(arch)).max().unwrap_or(0);
                 tag_bits + max_data
             }
+            Type::Usize => arch.pointer_bits,
             Type::MultiArray { element, dimensions } => {
                 let total: usize = dimensions.iter().product();
                 element.size_bits(arch) * total
@@ -636,9 +622,10 @@ impl Type {
     
     pub fn name(&self) -> String {
         match self {
+            Type::Usize => "usize".to_string(), 
             Type::StdStr => "String".to_string(),
             Type::Auto => "auto".to_string(),
-            Type::HashMap { key, value } => {format!("HashMap_{}", value.name())}
+            Type::HashMap { key: _, value } => {format!("HashMap_{}", value.name())}
             Type::ConstStr => "const str".to_string(),
             Type::Const(inner) => format!("const {}", inner.name()),
             Type::TripleDot => "...".to_string(),
@@ -686,7 +673,6 @@ impl Type {
                 let param_names: Vec<String> = params.iter().map(|p| p.name()).collect();
                 format!("fn({}) -> {}", param_names.join(", "), return_type.name())
             }
-            Type::Auto => "auto".to_string(),
         }
     }
 

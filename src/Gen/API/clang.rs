@@ -72,22 +72,34 @@ impl TargetOS {
 pub struct Clang;
 
 impl Clang {
+     
+    fn ensure_build_dirs() -> Result<(), String> {
+        let dirs = ["release/bin", "library"];
+        for dir in &dirs {
+            fs::create_dir_all(dir)
+                .map_err(|e| format!("Failed to create directory {}: {}", dir, e))?;
+        }
+        Ok(())
+    }
+
     fn create_cfg_stub() -> Result<PathBuf, String> {
+        Self::ensure_build_dirs()?;
+        
         let stub_c = r#"
 unsigned int __guard_eh_cont_count = 0;
 void* __guard_eh_cont_table = 0;
 "#;
 
-        let stub_path = Path::new("cfg_stub.c");
-        let obj_path = PathBuf::from("cfg_stub.obj");
-        let _ = fs::remove_file(stub_path);
+        let stub_path = PathBuf::from("release/bin/cfg_stub.c");
+        let obj_path = PathBuf::from("release/bin/cfg_stub.obj");
+        let _ = fs::remove_file(&stub_path);
         let _ = fs::remove_file(&obj_path);
 
-        fs::write(stub_path, stub_c).map_err(|e| format!("Failed to write CFG stub: {}", e))?;
+        fs::write(&stub_path, stub_c).map_err(|e| format!("Failed to write CFG stub: {}", e))?;
 
         let mut cmd = Command::new("clang");
         cmd.arg("-c")
-            .arg(stub_path)
+            .arg(&stub_path)
             .arg("-o")
             .arg(&obj_path)
             .arg("-O2");
@@ -111,6 +123,8 @@ void* __guard_eh_cont_table = 0;
         output_path: &Path,
         target_os: Option<TargetOS>,
     ) -> Result<(), String> {
+        Self::ensure_build_dirs()?;
+        
         let mut cmd = Command::new("clang");
         let target = target_os.unwrap_or_else(TargetOS::current);
         let obj_path = if output_path.extension().is_none() {
@@ -118,12 +132,18 @@ void* __guard_eh_cont_table = 0;
         } else {
             output_path.to_path_buf()
         };
-        let c_path = Path::new("output.c");
+        
+         
+        let c_path = if output_path.starts_with("library") {
+            PathBuf::from(output_path.parent().unwrap()).join("source.c")
+        } else {
+            PathBuf::from("release/bin/output.c")
+        };
 
-        fs::write(c_path, c_code).map_err(|e| format!("Failed to write C source: {}", e))?;
+        fs::write(&c_path, c_code).map_err(|e| format!("Failed to write C source: {}", e))?;
 
         cmd.arg("-c")
-            .arg(c_path)
+            .arg(&c_path)
             .arg("-o")
             .arg(&obj_path)
             .arg("-O2")
@@ -140,6 +160,7 @@ void* __guard_eh_cont_table = 0;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
+            eprintln!("\n{} Compilation failed! Generated C code preserved at: {}", "Debug:".yellow(), c_path.display());
             return Err(format!("Object compilation failed:\nSTDOUT:\n{}\nSTDERR:\n{}\n", stdout, stderr));
         }
 
@@ -152,9 +173,11 @@ void* __guard_eh_cont_table = 0;
         extra_libs: &[String],
         target_os: Option<TargetOS>,
     ) -> Result<(), String> {
+        Self::ensure_build_dirs()?;
+        
         let mut cmd = Command::new("clang");
         let target = target_os.unwrap_or_else(TargetOS::current);
-        let exe_path = format!("{}{}", output_name, target.executable_extension());
+        let exe_path = PathBuf::from("release/bin").join(format!("{}{}", output_name, target.executable_extension()));
 
         let cfg_stub = if target == TargetOS::Windows {
             Some(Self::create_cfg_stub()?)
@@ -189,7 +212,7 @@ void* __guard_eh_cont_table = 0;
             return Err(format!("Linking failed:\n{}", stderr));
         }
 
-        println!("   {} Executable linked: {}", "success:".green(), exe_path);
+        println!("   {} Executable linked: {}", "success:".green(), exe_path.display());
         Ok(())
     }
 
@@ -199,9 +222,11 @@ void* __guard_eh_cont_table = 0;
         extra_libs: &[String],
         target_os: Option<TargetOS>,
     ) -> Result<(), String> {
+        Self::ensure_build_dirs()?;
+        
         let target = target_os.unwrap_or_else(TargetOS::current);
-        let exe_path = format!("{}{}", output_name, target.executable_extension());
-        let c_path = Path::new("output.c");
+        let exe_path = PathBuf::from("release/bin").join(format!("{}{}", output_name, target.executable_extension()));
+        let c_path = PathBuf::from("release/bin/output.c");
 
         let cfg_stub = if target == TargetOS::Windows {
             Some(Self::create_cfg_stub()?)
@@ -209,7 +234,7 @@ void* __guard_eh_cont_table = 0;
             None
         };
 
-        fs::write(c_path, c_code).map_err(|e| format!("Failed to write C source: {}", e))?;
+        fs::write(&c_path, c_code).map_err(|e| format!("Failed to write C source: {}", e))?;
 
         let mut cmd = Command::new("clang");
 
@@ -217,7 +242,7 @@ void* __guard_eh_cont_table = 0;
             cmd.arg(stub);
         }
 
-        cmd.arg(c_path)
+        cmd.arg(&c_path)
             .arg("-o")
             .arg(&exe_path)
             .arg("-O2")
@@ -247,7 +272,7 @@ void* __guard_eh_cont_table = 0;
             return Err(format!("Compilation failed:\nSTDOUT:\n{}\nSTDERR:\n{}\n", stdout, stderr));
         }
 
-        println!("   {} Executable built: {}", "✓".green(), exe_path);
+        println!("   {} Executable built: {}", "success:".green(), exe_path.display());
         Ok(())
     }
 
@@ -286,8 +311,12 @@ void* __guard_eh_cont_table = 0;
 
     pub fn run_executable(exe_name: &str, target_os: Option<TargetOS>) -> Result<(), String> {
         let target = target_os.unwrap_or_else(TargetOS::current);
-        let exe_path = format!("{}{}{}", target.executable_prefix(), exe_name,target.executable_extension());
-        let output = Command::new(&exe_path).output().map_err(|e| format!("Failed to run {}: {}", exe_path, e))?;
+        let exe_path = PathBuf::from("release/bin").join(format!("{}{}", exe_name, target.executable_extension()));
+        
+        let output = Command::new(&exe_path)
+            .output()
+            .map_err(|e| format!("Failed to run {}: {}", exe_path.display(), e))?;
+        
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -303,105 +332,115 @@ void* __guard_eh_cont_table = 0;
         if exit_code != 0 {
             println!("\n{} Program exited with code: {}", "Error:".red(), exit_code);
             return Err(format!("Program failed with exit code {}", exit_code));
-        } else {
-            println!("{} Compilion compiled successfuly", "success:".green());
         }
 
         Ok(())
     }
+
 
     pub fn compile_with_libraries(
-        source: &str,
-        output_name: &str,
-        target_os: Option<TargetOS>,
-    ) -> Result<(), String> {
-        println!("   {} Lexing source code...", "→".bright_cyan());
-        let mut lexer = Lexer::new(source);
-        let tokens = lexer.tokenize();
+    source: &str,
+    output_name: &str,
+    target_os: Option<TargetOS>,
+) -> Result<(), String> {
+    Self::ensure_build_dirs()?;
+    
+    println!("   {} Lexing source code...", "success:".bright_cyan());
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.tokenize();
 
-        if !lexer.errors.is_empty() {
-            eprintln!("   {} Lexer errors:", "Error:".red());
-            for error in &lexer.errors {
-                eprintln!("      {}", error.message);
-            }
-            return Err("Lexer failed".to_string());
+    if !lexer.errors.is_empty() {
+        eprintln!("   {} Lexer errors:", "Error:".red());
+        for error in &lexer.errors {
+            eprintln!("      {}", error.message);
         }
-
-        println!("   {} Parsing tokens...", "→".bright_cyan());
-        let parser = Parser::new(tokens, source.to_string(), lexer.spans.clone());
-        let (program, structs, enums, externs, _, _, _, impls, _, _, import_decls) = parser.parse();
-
-        println!("   {} Processing imports...", "→".bright_cyan());
-        let footprint_packs = LibraryManager::process_imports_from_decls(&import_decls, target_os)?;
-        
-        LibraryManager::validate_imports(&import_decls, &footprint_packs).ok();
-
-        let mut library_includes = Vec::new();
-        let mut library_functions = Vec::new();
-        let mut library_objects = Vec::new();
-        
-        for pack in &footprint_packs {
-            println!("   {} Linking library: {} v{}", "→".bright_cyan(), pack.name, pack.version);
-            
-            for include in &pack.includes {
-                if !library_includes.contains(include) {
-                    library_includes.push(include.clone());
-                }
-            }
-            
-            for sig in &pack.function_signatures {
-                println!("      {} {}", "→".bright_black(), sig.name);
-                library_functions.push(sig.clone());
-            }
-            
-            let lib_path = PathBuf::from(&pack.source_library);
-            if lib_path.exists() {
-                println!("      {} Object file: {}", "✓".green(), lib_path.display());
-                library_objects.push(lib_path);
-            } else {
-                eprintln!("      {} Object file not found: {}", "Error:".red(), lib_path.display());
-                return Err(format!("Library object file not found: {}", lib_path.display()));
-            }
-        }
-
-        println!("   {} Generating C code...", "→".bright_cyan());
-        let arch = ArchConfig::x86_64();
-        let mut codegen = Codegen::new(arch, source.to_string(), "main.vix".to_string());
-        
-        codegen.set_import_context(&import_decls);
-        
-        let c_code = codegen.codegen_program_full(
-            &program,
-            &structs,
-            &enums,
-            &impls,
-            &externs,
-            &library_includes,
-            &library_functions,
-        )?;
-
-        println!("   {} Compiling to object file...", "→".bright_cyan());
-        let main_obj = PathBuf::from("main.o");
-        Clang::compile_to_object(&c_code, &main_obj, target_os)
-            .map_err(|e| format!("Failed to compile: {}", e))?;
-
-        println!("   {} Linking executable...", "→".bright_cyan());
-        let mut all_objects: Vec<&Path> = vec![main_obj.as_path()];
-        for lib_obj in &library_objects {
-            all_objects.push(lib_obj.as_path());
-        }
-        
-        Clang::link_executable(
-            &all_objects,
-            output_name,
-            &[],
-            target_os,
-        )?;
-        
-        let _ = fs::remove_file("main.o");
-        let _ = fs::remove_file("output.c");
-        
-        println!("   {} Build complete!", "✓".green());
-        Ok(())
+        return Err("Lexer failed".to_string());
     }
+
+    println!("   {} Parsing tokens...", "success:".bright_cyan());
+    let parser = Parser::new(tokens, source.to_string(), lexer.spans.clone());
+    let (program, structs, enums, externs, _, _, _, impls, _, _, import_decls) = parser.parse();
+
+    println!("   {} Processing imports...", "success:".bright_cyan());
+    let footprint_packs = LibraryManager::process_imports_from_decls(&import_decls, target_os)?;
+    
+    LibraryManager::validate_imports(&import_decls, &footprint_packs).ok();
+
+    let mut library_includes = Vec::new();
+    let mut library_functions = Vec::new();
+    let mut library_objects = Vec::new();
+    
+    let target = target_os.unwrap_or_else(TargetOS::current);
+    
+    for pack in &footprint_packs {
+        println!("   {} Linking library: {} v{}", "success:".bright_cyan(), pack.name, pack.version);
+        
+        for include in &pack.includes {
+            if !library_includes.contains(include) {
+                library_includes.push(include.clone());
+            }
+        }
+        
+        for sig in &pack.function_signatures {
+            println!("      {} {}", "success:".bright_black(), sig.name);
+            library_functions.push(sig.clone());
+        }
+        
+         
+        let lib_path = PathBuf::from(&pack.source_library);
+        
+         
+        let obj_path = if lib_path.extension().and_then(|s| s.to_str()) == Some("bin") {
+            lib_path.with_extension(target.object_extension().trim_start_matches('.'))
+        } else {
+            lib_path.clone()
+        };
+        
+        if obj_path.exists() {
+            println!("      {} Object file: {}", "success:".green(), obj_path.display());
+            library_objects.push(obj_path);
+        } else {
+            eprintln!("      {} Object file not found: {}", "Error:".red(), obj_path.display());
+            eprintln!("      {} Expected at: {}", "Info:".yellow(), obj_path.display());
+            return Err(format!("Library object file not found: {}", obj_path.display()));
+        }
+    }
+
+    println!("   {} Generating C code...", "success:".bright_cyan());
+    let arch = ArchConfig::x86_64();
+    let mut codegen = Codegen::new(arch, source.to_string(), "main.vix".to_string());
+    
+    codegen.set_import_context(&import_decls, &library_functions);
+    
+    let c_code = codegen.codegen_program_full(
+        &program,
+        &structs,
+        &enums,
+        &impls,
+        &externs,
+        &library_includes,
+        &library_functions,
+    )?;
+
+    println!("   {} Compiling to object file...", "success:".bright_cyan());
+    let main_obj = PathBuf::from("release/bin").join(format!("main{}", target.object_extension()));
+    Clang::compile_to_object(&c_code, &main_obj, target_os)
+        .map_err(|e| format!("Failed to compile: {}", e))?;
+
+    println!("   {} Linking executable...", "success:".bright_cyan());
+    let mut all_objects: Vec<&Path> = vec![main_obj.as_path()];
+    for lib_obj in &library_objects {
+        all_objects.push(lib_obj.as_path());
+    }
+    
+    Clang::link_executable(
+        &all_objects,
+        output_name,
+        &[],
+        target_os,
+    )?;
+    
+    println!("   {} Build complete!", "success:".green());
+    Ok(())
+}
 }

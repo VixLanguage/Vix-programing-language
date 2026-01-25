@@ -46,6 +46,7 @@ pub enum Type {
     Variadic,
     SelfType,
     Any,
+    Usize,
     Trait,
     Owned(Box<Type>),
     Ref(Box<Type>),
@@ -143,6 +144,7 @@ pub struct Function {
     pub return_type: Type,
     pub body: Vec<Stmt>,
     pub is_public: bool,
+    pub attributes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -297,8 +299,16 @@ pub enum Stmt {
         then_block: Vec<Stmt>,
         else_block: Option<Vec<Stmt>>,
     },
+    TypeAlias {
+        name: String,
+        target: Box<Expr>,
+    },
+    ModuleExports {
+        exports: Vec<(String, Option<String>)>,
+    },
     Expr(Expr),
 }
+
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModuleImport {
@@ -445,6 +455,7 @@ pub struct Codegen {
     pub module_function_signatures: HashMap<String, String>,  
     pub module_init_functions: Vec<String>,
     pub current_return_type: Option<Type>,
+    pub import_function_map: HashMap<String, String>,
 }
 
 pub struct CodegenConfig {
@@ -479,7 +490,9 @@ pub struct Parser {
     pub pos: usize,
     pub source: Arc<String>,
     pub diags: Vec<ParseDiagnostic>,
+    pub type_aliases: HashMap<String, Expr>,
 }
+
 
 pub struct Lexer {
     pub input: Vec<char>,

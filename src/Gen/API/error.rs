@@ -155,8 +155,7 @@ impl DiagnosticHandler {
 
     pub fn print_summary(&self) {
         if self.error_count > 0 || self.warning_count > 0 {
-            eprintln!("\nCompilation finished with {} error(s) and {} warning(s).", 
-                self.error_count, self.warning_count);
+            eprintln!("\nCompilation finished with {} error(s) and {} warning(s).", self.error_count, self.warning_count);
         }
     }
     

@@ -1,24 +1,7 @@
 use crate::import::*;
 
 impl Codegen {
-    pub fn ensure_string_typedef(&mut self) {
-         
-        if !self.ir.type_definitions.contains("Slice_char") {
-            let char_c_type = Type::char8().to_c_type(&self.arch, &mut self.type_registry);
-            let typedef = format!(
-                "typedef struct {{\n    {}* ptr;\n    size_t len;\n}} Slice_char;\n",
-                char_c_type
-            );
-            self.ir.type_definitions.push_str(&typedef);
-            self.ir.type_definitions.push('\n');
-        }
-    }
-
-
     pub fn codegen_string(&mut self, s: &str, body: &mut String) -> (String, Type) {
-        self.ensure_string_typedef();
-        
-         
         let ty = Type::Str { len_type: Box::new(Type::i64()) };
         let c_type = ty.to_c_type(&self.arch, &mut self.type_registry);
         

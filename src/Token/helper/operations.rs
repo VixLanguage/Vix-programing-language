@@ -1,4 +1,5 @@
 use crate::import::*;
+use crate::Token::storge::ast::{ParseDiagnostic, DiagnosticSeverity};
 
 impl Parser {
      pub fn current(&self) -> Token {
@@ -13,7 +14,7 @@ impl Parser {
         self.pos += 1;
     }
 
-    fn current_span(&self) -> SourceSpan {
+    pub fn current_span(&self) -> SourceSpan {
         self.spans.get(self.pos).cloned().unwrap_or(SourceSpan::from(0..0))
     }
 
@@ -24,6 +25,14 @@ impl Parser {
             self.advance();
             return;
         }
+        
+        self.diags.push(ParseDiagnostic {
+            message: format!("Expected {:?}, but found {:?}", expected, current),
+            span: self.current_span(),
+            severity: DiagnosticSeverity::Error,
+            help: None,
+        });
+
         let sync_set: std::collections::HashSet<Token> = sync.into_iter().collect();
         let mut skipped = 0;
         let max_skip = 50;

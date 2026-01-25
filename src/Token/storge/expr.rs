@@ -65,6 +65,7 @@ impl Default for Function {
             return_type: Type::Void,
             body: Vec::new(),
             is_public: false,
+            attributes: Vec::new(),
         }
     }
 }

@@ -45,15 +45,28 @@ impl Codegen {
         let loc = self.default_location();
         let calling_convention = self.map_abi_to_calling_convention(abi);
         let abi_attrs = self.generate_abi_attributes(abi);
-        let return_type = func.return_type.to_c_type(&self.arch, &mut self.type_registry);
+        
+        let return_type = match &func.return_type {
+            Type::ConstStr | Type::Str { .. } => "const char*".to_string(),
+            _ => {
+                println!("No it now const char");
+                func.return_type.to_c_type(&self.arch, &mut self.type_registry)
+            }
+        };
+        
         let mut params_str = Vec::new();
         
         if !abi_attrs.is_empty() {
             self.ir.forward_decls.push_str(&abi_attrs);
         }
-        
 
         for (param_name, param_type) in &func.params {
+             
+            if param_name == "..." {
+                params_str.push("...".to_string());
+                continue;
+            }
+            
             let underlying_type = match param_type {
                 Type::Const(inner) => inner.as_ref(),
                 other => other,
@@ -76,7 +89,19 @@ impl Codegen {
                 return Err(());
             }
             
-            let c_type = param_type.to_c_type(&self.arch, &mut self.type_registry);
+             
+            let c_type = match param_type {
+                Type::ConstStr => "const char*".to_string(),
+                Type::Str { .. } => "const char*".to_string(),
+                Type::Const(inner) if matches!(inner.as_ref(), Type::Char { bits: 8, .. }) => {
+                    "const char*".to_string()
+                }
+                Type::Ptr(inner) if matches!(inner.as_ref(), Type::Const(t) if matches!(t.as_ref(), Type::Char { bits: 8, .. })) => {
+                    "const char*".to_string()
+                }
+                _ => param_type.to_c_type(&self.arch, &mut self.type_registry)
+            };
+            
             params_str.push(format!("{} {}", c_type, param_name));
         }
         
@@ -97,11 +122,7 @@ impl Codegen {
                     params_str.join(", ")
                 )
             };
-       
-        let _known_abis = ["c", "stdcall", "cdecl", "fastcall", "vectorcall", "rust", "system"];
-
-
-        
+    
         self.ir.forward_decls.push_str(&extern_decl);
         
         if matches!(abi.to_lowercase().as_str(), "rust" | "c++" | "cpp") {

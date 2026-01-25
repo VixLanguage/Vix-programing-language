@@ -42,10 +42,10 @@ pub enum Token {
     AlignOf,
     OffsetOf,
     OneOf,
-    Caret, Tilde, Type,
+    Caret, Tilde, Type, Hash,
     Plan, Let,
-
-    Bool, Void, Str,
+    Circle, At,
+    Bool, Void, Str, Isize, Usize,
     TypeIdentifier(String),
     
     Identifier(String),

@@ -4,7 +4,9 @@ use crate::import::*;
 pub struct ImportContext {
     pub library_imports: HashSet<String>,
     pub symbol_imports: HashMap<String, String>,
-}   
+    pub module_exports: HashMap<String, Vec<String>>,
+    pub auto_imported: bool,
+}
 
 impl Default for ImportContext {
     fn default() -> Self {
@@ -12,11 +14,27 @@ impl Default for ImportContext {
     }
 }
 
+pub type ParseResult = (
+    Program,
+    Vec<StructDef>,
+    Vec<EnumDef>,
+    Vec<ExternDecl>,
+    Vec<ModuleImport>,
+    Vec<ModuleUse>,
+    Vec<ClassDef>,
+    Vec<ImplBlock>,
+    Vec<TraitDef>,
+    UndefinedFunctions,
+    Vec<ImportDecl>
+);
+
 impl ImportContext {
     pub fn new() -> Self {
         ImportContext {
             library_imports: HashSet::new(),
             symbol_imports: HashMap::new(),
+            module_exports: HashMap::new(),
+            auto_imported: false,
         }
     }
     
@@ -31,7 +49,23 @@ impl ImportContext {
     pub fn get_symbol_library(&self, name: &str) -> Option<&String> {
         self.symbol_imports.get(name)
     }
+
+    pub fn add_core_imports(&mut self) {
+        if !self.auto_imported {
+            self.library_imports.insert("core".to_string());
+            self.auto_imported = true;
+        }
+    }
+
+    pub fn add_module_export(&mut self, module: String, function: String) {
+        self.module_exports.entry(module).or_insert_with(Vec::new).push(function);
+    }
+
+    pub fn is_module_function(&self, name: &str) -> bool {
+        self.module_exports.values().any(|funcs| funcs.contains(&name.to_string()))
+    }
 }
+
 
 impl Parser {
     pub fn new(tokens: Vec<Token>, source: String, spans: Vec<SourceSpan>) -> Self {
@@ -40,24 +74,28 @@ impl Parser {
             spans, 
             pos: 0, 
             source: Arc::new(source), 
-            diags: Vec::new() 
+            diags: Vec::new(),
+            type_aliases: HashMap::new(),
         }
     }
 
+
+
     pub fn build_import_context(import_decls: &[ImportDecl]) -> ImportContext {
         let mut context = ImportContext::new();
+
+        context.add_core_imports();
         
         for import in import_decls {
             match import {
                 ImportDecl::LibraryImport { name } => {
-                     
                     context.library_imports.insert(name.clone());
                 }
                 ImportDecl::FileImport { name, from } => {    
                     context.symbol_imports.insert(name.clone(), from.clone());
                 }
-                ImportDecl::WildcardImport { from: _ } => {
-                     
+                ImportDecl::WildcardImport { from } => {
+                    context.library_imports.insert(from.clone());
                 }
             }
         }
@@ -65,6 +103,46 @@ impl Parser {
         context
     }
 
+
+    pub fn parse_attribute(&mut self) -> (String, Option<String>) {
+         
+        if self.current() == Token::Hash {
+            self.expect(Token::Hash, vec![Token::LeftBracket]);
+            self.expect(Token::LeftBracket, vec![Token::RightBracket]);
+        } else if self.current() == Token::At {
+            self.advance();
+        }
+        
+        let name = if let Token::Identifier(id) = self.current() {
+            self.advance();
+            id
+        } else if let Token::TypeIdentifier(id) = self.current() {
+            self.advance();
+            id
+        } else {
+            "error".to_string()
+        };
+        
+         
+        let param = if self.current() == Token::LeftParen {
+            self.advance();
+            let value = if let Token::String(s) = self.current() {
+                self.advance();
+                Some(s)
+            } else {
+                None
+            };
+            self.expect(Token::RightParen, vec![Token::Extern]);
+            value
+        } else if self.current() == Token::RightBracket {
+            self.expect(Token::RightBracket, vec![Token::Func]);
+            None
+        } else {
+            None
+        };
+        
+        (name, param)
+    }
     pub fn get_location(&self, pos: usize) -> SourceLocation {
         let lines: Vec<&str> = self.source.lines().collect();
         let mut current_pos = 0;
@@ -298,7 +376,7 @@ impl Parser {
             Token::Bool => { self.advance(); Type::Bool }
             Token::Void => { self.advance(); Type::Void }
             Token::StdStr => { self.advance(); Type::StdStr }
-
+            Token::Usize => { self.advance(); Type::Usize }
             Token::Str => {
                 self.advance();
                 
@@ -423,7 +501,7 @@ impl Parser {
 
     fn parse_primary(&mut self) -> Expr {
         let current = self.current();
-        
+
         match current {
              Token::Plan => {
                 self.advance();
@@ -492,8 +570,14 @@ impl Parser {
             
 
             Token::Identifier(name) => {
-    let var_name = name.clone();
-    self.advance();
+                let var_name = name.clone();
+                self.advance();
+                
+                 
+                if let Some(aliased_expr) = self.type_aliases.get(&var_name) {
+                     
+                    return aliased_expr.clone();
+                }
     
     if self.current() == Token::Dot {
         self.advance();
@@ -869,7 +953,7 @@ impl Parser {
         }
     }
 
-    fn is_type_token(&self, token: Token) -> bool {
+    pub fn is_type_token(&self, token: Token) -> bool {
         matches!(token,
             Token::TypeIdentifier(_) | Token::Bool | Token::Void | Token::Any |
             Token::Str | Token::Ampersand| Token::BitwiseAnd | Token::TripleDot |
@@ -1264,9 +1348,7 @@ impl Parser {
                         None
                     };
                     
-                    if self.current() == Token::End {
-                         self.advance();
-                    } else if self.current() == Token::Comma {
+                    if matches!(self.current(), Token::End | Token::Comma) {
                          self.advance();
                     }
                     
@@ -1308,9 +1390,7 @@ impl Parser {
                         }
                     }
     
-                    if self.current() == Token::End {
-                        self.advance();
-                    } else if self.current() == Token::Comma {
+                    if matches!(self.current(), Token::End | Token::Comma) {
                         self.advance();
                     }
     
@@ -1373,13 +1453,47 @@ impl Parser {
                 }
                 Stmt::For(var_name, iter_expr, body)
             }
+            Token::Hash => {
+                let mut attributes = Vec::new();
+                while self.current() == Token::Hash {
+                    let (name, param) = self.parse_attribute();
+                     
+                    attributes.push(if let Some(p) = param {
+                        format!("{}({})", name, p)
+                    } else {
+                        name
+                    });
+                }
+                
+                let is_public = if self.current() == Token::Pub {
+                    self.advance();
+                    true
+                } else {
+                    false 
+                };
+                
+                if self.current() == Token::Func {
+                    Stmt::Function(self.parse_function_with_visibility(false, is_public, attributes))
+                } else {
+                    self.diags.push(ParseDiagnostic {
+                        message: "Expected function after attributes".to_string(),
+                        span: self.current_span(),
+                        severity: DiagnosticSeverity::Error,
+                        help: Some("Attributes are currently only supported on functions".to_string()),
+                    });
+
+                    self.advance();
+                    Stmt::Expr(Expr::None)
+                }
+            }
+
             Token::Mod => self.parse_module(false),
-            Token::Func => Stmt::Function(self.parse_function_with_visibility(false, false)),
+            Token::Func => Stmt::Function(self.parse_function_with_visibility(false, false, vec![])),
             Token::Pub => {
                 self.advance();
                 match self.current() {
                      Token::Mod => self.parse_module(true),
-                     Token::Func => Stmt::Function(self.parse_function_with_visibility(false, true)),
+                     Token::Func => Stmt::Function(self.parse_function_with_visibility(false, true, vec![])),
                      Token::Struct => Stmt::StructDef(self.parse_struct(true)),
                      Token::Enum => Stmt::EnumDef(self.parse_enum(true)),
                      _ => panic!("Expected Item after Pub"), 
@@ -1583,11 +1697,7 @@ impl Parser {
                     self.expect(Token::RightParen, vec![Token::End]);
                     
                      
-                    if types.len() == 1 {
-                        variants.push(EnumVariant::Tuple(vname, types));
-                    } else {
-                        variants.push(EnumVariant::Tuple(vname, types));
-                    }
+                    variants.push(EnumVariant::Tuple(vname, types));
                 }
             } else {
                  
@@ -1610,11 +1720,11 @@ impl Parser {
 }
 
     fn parse_function(&mut self, is_module: bool) -> Function {
-        self.parse_function_with_visibility(is_module, false)
+        self.parse_function_with_visibility(is_module, false, vec![])
     }
    
     
-    fn parse_function_with_visibility(&mut self, is_module: bool, is_public: bool) -> Function {
+    fn parse_function_with_visibility(&mut self, is_module: bool, is_public: bool, attributes: Vec<String>) -> Function {
         self.expect(Token::Func, vec![Token::Colon, Token::End]);
         
         let name = if let Token::Identifier(name) = self.current() {
@@ -1629,32 +1739,29 @@ impl Parser {
         
         let mut params = Vec::new();
         
-        if self.current() == Token::Selfish {
-            self.advance();
-            if self.current() == Token::Comma {
+        let is_self_param = match self.current() {
+            Token::Selfish => true,
+            Token::Mutable | Token::Mut if self.peek(1) == Token::Selfish => true,
+            Token::Reference | Token::Ampersand if self.peek(1) == Token::Selfish => true,
+            Token::Reference | Token::Ampersand 
+                if matches!(self.peek(1), Token::Mutable | Token::Mut) 
+                && self.peek(2) == Token::Selfish => true,
+            _ => false,
+        };
+
+        if is_self_param {
+            while matches!(
+                self.current(), 
+                Token::Selfish | Token::Mutable | Token::Mut | Token::Reference | Token::Ampersand
+            ) {
                 self.advance();
             }
-                    } else if (self.current() == Token::Mutable || self.current() == Token::Mut) && self.peek(1) == Token::Selfish {
-            self.advance();
-            self.advance();
-            if self.current() == Token::Comma {
-                self.advance();
-            }
-                    } else if (self.current() == Token::Reference || self.current() == Token::Ampersand) && self.peek(1) == Token::Selfish {
-            self.advance();
-            self.advance();
-            if self.current() == Token::Comma {
-                self.advance();
-            }
-                    } else if (self.current() == Token::Reference || self.current() == Token::Ampersand) && (self.peek(1) == Token::Mutable || self.peek(1) == Token::Mut) && self.peek(2) == Token::Selfish {
-            self.advance();
-            self.advance();
-            self.advance();
+
             if self.current() == Token::Comma {
                 self.advance();
             }
         }
-        
+
         while self.current() != Token::RightParen {
             let modifier = match self.current() {
                 Token::Mutable => {
@@ -1719,9 +1826,7 @@ impl Parser {
             }
         }
        
-        if self.current() == Token::End {
-            self.advance();
-        }
+        self.expect(Token::End, vec![]);
        
         Function {
             name,
@@ -1729,6 +1834,7 @@ impl Parser {
             return_type,
             body,
             is_public,
+            attributes,
         }
     }
 
@@ -1806,7 +1912,88 @@ impl Parser {
         }
     }
 
-    pub fn parse(mut self) -> (Program, Vec<StructDef>, Vec<EnumDef>, Vec<ExternDecl>, Vec<ModuleImport>, Vec<ModuleUse>, Vec<ClassDef>, Vec<ImplBlock>, Vec<TraitDef>, UndefinedFunctions, Vec<ImportDecl>) {
+    fn parse_type_alias(&mut self) -> Stmt {
+         
+        self.expect(Token::Type, vec![Token::Identifier("".to_string())]);
+        
+        let name = if let Token::Identifier(name) = self.current() {
+            self.advance();
+            name
+        } else {
+            self.advance();
+            "error".to_string()
+        };
+        
+         
+        self.expect(Token::Equals, vec![Token::Semicolon]);
+        
+         
+        let target = Box::new(self.parse_expr());
+        
+         
+        self.type_aliases.insert(name.clone(), *target.clone());
+        
+        Stmt::TypeAlias { name, target }
+    }
+
+    fn parse_module_exports(&mut self) -> Stmt {
+         
+        if let Token::Identifier(id) = self.current() {
+            if id != "export" {
+                panic!("Expected 'export' identifier");
+            }
+            self.advance();
+        }
+        
+         
+        self.expect(Token::LeftParen, vec![Token::RightParen]);
+        
+        let mut exports = Vec::new();
+        
+        while self.current() != Token::RightParen && self.current() != Token::EOF {
+             
+            let name = if let Token::Identifier(name) = self.current() {
+                self.advance();
+                name
+            } else {
+                self.advance();
+                "error".to_string()
+            };
+            
+             
+            let alias = if let Token::Identifier(as_kw) = self.current() {
+                if as_kw == "as" {
+                    self.advance();
+                    if let Token::Identifier(alias_name) = self.current() {
+                        self.advance();
+                        Some(alias_name)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            
+            exports.push((name, alias));
+            
+             
+            if self.current() == Token::Comma {
+                self.advance();
+            }
+        }
+        
+         
+        self.expect(Token::RightParen, vec![Token::Semicolon]);
+        
+        Stmt::ModuleExports { exports }
+    }
+
+    
+
+    pub fn parse(mut self) -> ParseResult {
         let mut functions = Vec::new();
         let mut structs = Vec::new();
         let mut enums = Vec::new();
@@ -1819,7 +2006,10 @@ impl Parser {
         let mut import_decls = Vec::new();
         let mut constants = Vec::new();
         let mut modules = Vec::new();
-        let stmts: Vec<Stmt> = Vec::new();  
+        let _stmts: Vec<Stmt> = Vec::new(); 
+        
+         
+         
        
          
         while self.current() != Token::EOF {
@@ -1847,7 +2037,7 @@ impl Parser {
                         }
                         Token::Func => {
                             println!("DEBUG: Parsing public function");
-                            functions.push(self.parse_function_with_visibility(false, true));
+                            functions.push(self.parse_function_with_visibility(false, true, vec![]));
                         }
                         Token::Struct => structs.push(self.parse_struct(true)),
                         Token::Enum => enums.push(self.parse_enum(true)),
@@ -1855,336 +2045,21 @@ impl Parser {
                     }
                 }
 
-                Token::Mod => {
-                     println!("DEBUG: Parsing Mod");
-                     if let Token::String(_) = self.peek(1) {
-                         self.advance();
-                         if let Token::String(path) = self.current() {
-                             self.advance();
-                             imports.push(ModuleImport { path });
-                         }
-                     } else {
-                         modules.push(self.parse_module(false));
-                     }
-                }
-
-                Token::Const => {
-                     
-                    self.advance();
-                    if let Token::Identifier(name) = self.current() {
+                Token::At => {
+                    let (attr_name, library_opt) = self.parse_attribute();
+                    
+                    if attr_name == "ffi" && self.current() == Token::Extern {
                         self.advance();
-                        let ty = if self.current() == Token::Colon {
+                        
+                        let abi = if let Token::String(abi) = self.current() {
                             self.advance();
-                            self.parse_type()
+                            abi
                         } else {
-                            Type::Void
+                            "C".to_string()
                         };
                         
-                        self.expect(Token::Equals, vec![Token::Semicolon]);
-                        let value = self.parse_expr();
-                        if self.current() == Token::Semicolon {
-                            self.advance();
-                        }
-                        constants.push(GlobalConst { name, ty, value });
-                    } else {
-                        self.advance();
-                    }
-                }
-
-                Token::Enum => {
-                    enums.push(self.parse_enum(false));
-                }
-
-                Token::Func => {
-                    println!("DEBUG: Parsing function");
-                    let func = self.parse_function_with_visibility(false, false);
-                    functions.push(func);
-                    println!("DEBUG: Functions count: {}", functions.len());
-                }
-
-                Token::Struct => {
-                    println!("DEBUG: Parsing struct");
-                    structs.push(self.parse_struct(false));
-                }
-
-                Token::Impl => {
-                    self.advance();
-                    
-                    let struct_name = if let Token::Identifier(name) = self.current() {
-                        self.advance();
-                        name
-                    } else {
-                        self.advance();
-                        "error".to_string()
-                    };
-                    
-                    let mut constructor_params = Vec::new();
-                    if self.current() == Token::LeftParen {
-                        self.advance();
+                        let library = library_opt.unwrap_or_else(|| "".to_string());
                         
-                        while self.current() != Token::RightParen && self.current() != Token::EOF {
-                            let pname = if let Token::Identifier(pname) = self.current() {
-                                self.advance();
-                                pname
-                            } else {
-                                self.advance();
-                                "error".to_string()
-                            };
-                            
-                            self.expect(Token::Colon, vec![Token::Comma, Token::RightParen]);
-                            let ptype = self.parse_type();
-                            constructor_params.push((pname, ptype));
-                            
-                            if self.current() == Token::Comma {
-                                self.advance();
-                            }
-                        }
-                        
-                        self.expect(Token::RightParen, vec![Token::For, Token::Colon]);
-                    }
-                    
-                    let trait_name = if self.current() == Token::For {
-                        self.advance();
-                        if let Token::Identifier(trait_name) = self.current() {
-                            self.advance();
-                            Some(trait_name)
-                        } else {
-                            self.advance();
-                            None
-                        }
-                    } else {
-                        None
-                    };
-                    
-                    self.expect(Token::Colon, vec![Token::End]);
-                    
-                    let mut methods = Vec::new();
-                    let mut constructor_body = None;
-     
-                    while !matches!(self.current(), Token::End | Token::EOF) {
-                        let mut init_fields = Vec::new();        
-                   
-                        if let Token::Identifier(name) = self.current()
-                            && name == struct_name && self.peek(1) == Token::LeftParen {
-                                self.advance();
-                                self.advance();
-                                
-
-                                while !matches!(self.current(), Token::RightParen | Token::EOF) {
-                                    if let Token::Identifier(field_name) = self.current() {
-                                        self.advance();
-                                        self.expect(Token::Equals, vec![Token::Comma, Token::RightParen]);
-                                        let field_expr = self.parse_expr();
-                                        init_fields.push((field_name, field_expr));
-                                        
-                                        if self.current() == Token::Comma {
-                                            self.advance();
-                                        }
-                                    } else {
-                                        self.advance();
-                                        break;
-                                    }
-                                }
-                                
-                                self.expect(Token::RightParen, vec![Token::Func, Token::End]);
-                                constructor_body = Some(init_fields);
-                                continue;
-                            }
-                        
-                        let is_public = if self.current() == Token::Pub {
-                            self.advance();
-                            true
-                        } else {
-                            false
-                        };
-
-                        if self.current() == Token::Func {
-                            self.advance();
-                            
-                            let method_name = if let Token::Identifier(name) = self.current() {
-                                self.advance();
-                                name
-                            } else {
-                                self.advance();
-                                "error".to_string()
-                            };
-                            
-                            self.expect(Token::LeftParen, vec![Token::RightParen, Token::Colon]);
-                            
-                            let mut params = Vec::new();
-                            let mut self_modifier = None;
-                            
-                            if self.current() == Token::Selfish {
-                                self.advance();
-                                self_modifier = Some(SelfModifier::Immutable);
-                                if self.current() == Token::Comma {
-                                    self.advance();
-                                }
-                            } else if (self.current() == Token::Mutable || self.current() == Token::Mut) && self.peek(1) == Token::Selfish {
-                                self.advance();
-                                self.advance();
-                                self_modifier = Some(SelfModifier::Mutable);
-                                if self.current() == Token::Comma {
-                                    self.advance();
-                                }
-                            } else if (self.current() == Token::Reference || self.current() == Token::Ampersand) && self.peek(1) == Token::Selfish {
-                                self.advance();
-                                self.advance();
-                                self_modifier = Some(SelfModifier::Reference);
-                                if self.current() == Token::Comma {
-                                    self.advance();
-                                }
-                            } else if (self.current() == Token::Reference || self.current() == Token::Ampersand) && (self.peek(1) == Token::Mutable || self.peek(1) == Token::Mut) && self.peek(2) == Token::Selfish {
-                                self.advance();
-                                self.advance();
-                                self.advance();
-                                
-                                self_modifier = Some(SelfModifier::Reference);
-
-                                if self.current() == Token::Comma {
-                                    self.advance();
-                                }
-                            } else if let Token::Identifier(s) = self.current()
-                                && s == "brw" && self.peek(1) == Token::Selfish {
-                                    self.advance();
-                                    self.advance();
-
-                                    self_modifier = Some(SelfModifier::Borrow);
-                                    if self.current() == Token::Comma {
-                                        self.advance();
-                                    }
-                                }
-                                    
-                            while self.current() != Token::RightParen && self.current() != Token::EOF {
-                                let modifier = match self.current() {
-                                    Token::Mutable => {
-                                        self.advance();
-                                        ParamModifier::Mutable
-                                    }
-                                    Token::Reference => {
-                                        self.advance();
-                                        ParamModifier::Reference
-                                    }
-                                    _ => ParamModifier::Immutable
-                                };
-                                
-                                let pname = if let Token::Identifier(pname) = self.current() {
-                                    self.advance();
-                                    pname
-                                } else {
-                                    self.advance();
-                                    "error".to_string()
-                                };
-                                
-                                self.expect(Token::Colon, vec![Token::Comma, Token::RightParen]);
-                                let ptype = self.parse_type();
-                                params.push((pname, ptype, modifier));
-                                
-                                if self.current() == Token::Comma {
-                                    self.advance();
-                                }
-                            }
-                            
-                            self.expect(Token::RightParen, vec![Token::Colon]);
-                            
-                            
-                            let mut body = Vec::new();
-                            let return_type = if self.current() == Token::Arrow || self.current() == Token::Colon {
-                                self.advance();
-                                if self.is_type_token(self.current()) {
-                                    self.parse_type()
-                                } else {
-                                    Type::Void
-                                }
-                            } else {
-                                Type::Void
-                            };
-                            
-                            while !matches!(self.current(), Token::End | Token::Func | Token::EOF) {
-                            
-                                if matches!(self.current(), Token::End | Token::Func) {
-                                    break;
-                                } 
-                                
-                                body.push(self.parse_stmt());
-                                if self.current() == Token::Semicolon {
-                                    self.advance();
-                                }
-                            }
-                            
-                            if self.current() == Token::End {
-                                self.advance();
-                            }
-                            
-                            methods.push(ImplMethod {
-                                name: method_name,
-                                params,
-                                return_type,
-                                body,
-                                self_modifier,
-                                is_public,
-                            });
-                        } else if self.current() == Token::End {
-                            break;
-                        } else {
-                            self.advance();
-                        }
-                    }
-                    
-                    if self.current() == Token::End {
-                        self.advance();
-                    }
-                    
-                    impls.push(ImplBlock {
-                        struct_name,
-                        trait_name,
-                        constructor_params,
-                        constructor_body,
-                        methods,
-                    });
-                }
-
-                Token::Mod => {
-                    self.advance();
-                    if let Token::String(path) = self.current() {
-                        self.advance();
-                        imports.push(ModuleImport { path });
-                    } else {
-                        self.advance();
-                    }
-                }
-                Token::Use => {
-                    self.advance();
-                    if let Token::Identifier(module_name) = self.current() {
-                        self.advance();
-                        uses.push(ModuleUse { module_name });
-                    } else {
-                        self.advance();
-                    }
-                }
-
-                Token::Extern => {
-                    self.advance();
-                    
-                    let abi = if let Token::String(abi) = self.current() {
-                        self.advance();
-                        abi
-                    } else {
-                        self.advance();
-                        "C".to_string()
-                    };
-                    
-                    if self.current() == Token::From {
-                        self.advance();
-                        
-                        let library = if let Token::String(library) = self.current() {
-                            self.advance();
-                            library
-                        } else {
-                            self.advance();
-                            "".to_string()
-                        };
-
                         self.expect(Token::Colon, vec![Token::End, Token::Func]);
                         
                         let mut functions_list = Vec::new();
@@ -2270,117 +2145,343 @@ impl Parser {
                             library, 
                             functions: functions_list 
                         });
+                    } else {
+                         
+                        self.diags.push(ParseDiagnostic {
+                            message: format!("Unknown attribute: @{}", attr_name),
+                            span: self.current_span(),
+                            severity: DiagnosticSeverity::Error,
+                            help: Some("Only @ffi is supported at the top level".to_string()),
+                        });
+                        self.advance();
                     }
                 }
-               
 
-                Token::Pub => {
-                    self.advance();
-                    match self.current() {
-                        Token::Extern => {
+                Token::Mod => {
+                     println!("DEBUG: Parsing Mod");
+                     if let Token::String(_) = self.peek(1) {
+                         self.advance();
+                         if let Token::String(path) = self.current() {
+                             self.advance();
+                             imports.push(ModuleImport { path });
+                         }
+                     } else {
+                         modules.push(self.parse_module(false));
+                     }
+                }
+
+                    Token::Const => {
+                        self.advance();
+                        if let Token::Identifier(name) = self.current() {
                             self.advance();
-                            let abi = if let Token::String(abi) = self.current() {
+                            let ty = if self.current() == Token::Colon {
                                 self.advance();
-                                abi
+                                self.parse_type()
+                            } else {
+                                Type::Void
+                            };
+                            
+                            self.expect(Token::Equals, vec![Token::Semicolon]);
+                            let value = self.parse_expr();
+                            if self.current() == Token::Semicolon {
+                                self.advance();
+                            }
+                            constants.push(GlobalConst { name, ty, value });
+                        } else {
+                            self.advance();
+                        }
+                    }
+
+                Token::Type => {
+                    println!("DEBUG: Parsing type alias");
+                    let alias_stmt = self.parse_type_alias();
+                     
+                     
+                    if self.current() == Token::Semicolon {
+                        self.advance();
+                    }
+                }
+
+                Token::Enum => {
+                    enums.push(self.parse_enum(false));
+                }
+
+                Token::Func => {
+                    println!("DEBUG: Parsing function");
+                    let func = self.parse_function_with_visibility(false, false, vec![]);
+                    functions.push(func);
+                    println!("DEBUG: Functions count: {}", functions.len());
+                }
+
+                Token::Struct => {
+                    println!("DEBUG: Parsing struct");
+                    structs.push(self.parse_struct(false));
+                }
+
+                Token::Impl => {
+                    self.advance();
+                    
+                    let struct_name = if let Token::Identifier(name) = self.current() {
+                        self.advance();
+                        name
+                    } else {
+                        self.advance();
+                        "error".to_string()
+                    };
+                    
+                    let mut constructor_params = Vec::new();
+                    if self.current() == Token::LeftParen {
+                        self.advance();
+                        
+                        while self.current() != Token::RightParen && self.current() != Token::EOF {
+                            let pname = if let Token::Identifier(pname) = self.current() {
+                                self.advance();
+                                pname
                             } else {
                                 self.advance();
-                                "C".to_string()
+                                "error".to_string()
                             };
-                            if self.current() == Token::From {
+                            
+                            self.expect(Token::Colon, vec![Token::Comma, Token::RightParen]);
+                            let ptype = self.parse_type();
+                            constructor_params.push((pname, ptype));
+                            
+                            if self.current() == Token::Comma {
                                 self.advance();
-                                let library = if let Token::String(library) = self.current() {
-                                    self.advance();
-                                    library
-                                } else {
-                                    self.advance();
-                                    "".to_string()
+                            }
+                        }
+                        
+                        self.expect(Token::RightParen, vec![Token::For, Token::Colon]);
+                    }
+                    
+                    let trait_name = if self.current() == Token::For {
+                        self.advance();
+                        if let Token::Identifier(trait_name) = self.current() {
+                            self.advance();
+                            Some(trait_name)
+                        } else {
+                            self.advance();
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    
+                    self.expect(Token::Colon, vec![Token::End]);
+                    
+                    let mut methods = Vec::new();
+                    let mut constructor_body = None;
+     
+                    while !matches!(self.current(), Token::End | Token::EOF) {
+                        let mut init_fields = Vec::new();        
+                   
+                        if let Token::Identifier(name) = self.current()
+                            && name == struct_name && self.peek(1) == Token::LeftParen {
+                                 
+                                self.advance();
+                                self.advance();
+                                
+
+                                while !matches!(self.current(), Token::RightParen | Token::EOF) {
+                                    if let Token::Identifier(field_name) = self.current() {
+                                        self.advance();
+                                        self.expect(Token::Equals, vec![Token::Comma, Token::RightParen]);
+                                        let field_expr = self.parse_expr();
+                                        init_fields.push((field_name, field_expr));
+                                        
+                                        if self.current() == Token::Comma {
+                                            self.advance();
+                                        }
+                                    } else {
+                                        self.advance();
+                                        break;
+                                    }
+                                }
+                                
+                                self.expect(Token::RightParen, vec![Token::Func, Token::End]);
+                                constructor_body = Some(init_fields);
+                                continue;
+                            }
+                        
+                         
+                        if self.current() == Token::Unsafe {
+                            self.advance();
+                        }
+                        
+                        let is_public = if self.current() == Token::Pub {
+                            self.advance();
+                            true
+                        } else {
+                            false
+                        };
+
+                        if self.current() == Token::Func {
+                            self.advance();
+                            
+                            let method_name = if let Token::Identifier(name) = self.current() {
+                                self.advance();
+                                name
+                            } else {
+                                self.advance();
+                                "error".to_string()
+                            };
+                            
+                            self.expect(Token::LeftParen, vec![Token::RightParen, Token::Colon]);
+                            
+                            let mut params = Vec::new();
+                            let mut self_modifier = None;
+                            
+                             
+                            let is_self_token = |t: &Token| matches!(t, Token::Selfish) || matches!(t, Token::Identifier(s) if s == "self");
+                            
+                            if is_self_token(&self.current()) {
+                                self.advance();
+                                self_modifier = Some(SelfModifier::Immutable);
+                                if self.current() == Token::Comma { self.advance(); }
+                            } 
+                            else if (matches!(self.current(), Token::Mutable | Token::Mut)) && is_self_token(&self.peek(1)) {
+                                self.advance(); self.advance();
+                                self_modifier = Some(SelfModifier::Mutable);
+                                if self.current() == Token::Comma { self.advance(); }
+                            }
+                            else if (matches!(self.current(), Token::Reference | Token::Ampersand)) && is_self_token(&self.peek(1)) {
+                                self.advance(); 
+                                self.advance();
+
+                                self_modifier = Some(SelfModifier::Reference);
+                                if self.current() == Token::Comma { self.advance(); }
+                            }
+                            else if (matches!(self.current(), Token::Reference | Token::Ampersand)) && (matches!(self.peek(1), Token::Mutable | Token::Mut)) && is_self_token(&self.peek(2)) {
+                                self.advance(); self.advance(); self.advance();
+                                 
+                                self_modifier = Some(SelfModifier::Mutable); 
+                                if self.current() == Token::Comma { self.advance(); }
+                            }
+                            else if let Token::Identifier(s) = self.current()
+                                && s == "brw" && is_self_token(&self.peek(1)) {
+                                    self.advance(); self.advance();
+                                    self_modifier = Some(SelfModifier::Borrow);
+                                    if self.current() == Token::Comma { self.advance(); }
+                                }
+                                    
+                            while self.current() != Token::RightParen && self.current() != Token::EOF {
+                                let modifier = match self.current() {
+                                    Token::Mutable => {
+                                        self.advance();
+                                        ParamModifier::Mutable
+                                    }
+                                    Token::Reference => {
+                                        self.advance();
+                                        ParamModifier::Reference
+                                    }
+                                    _ => ParamModifier::Immutable
                                 };
                                 
-                                self.expect(Token::Colon, vec![Token::End, Token::Func]);
+                                let pname = if let Token::Identifier(pname) = self.current() {
+                                    self.advance();
+                                    pname
+                                } else {
+                                    self.advance();
+                                    "error".to_string()
+                                };
                                 
-                                let mut functions_list = Vec::new();
+                                self.expect(Token::Colon, vec![Token::Comma, Token::RightParen]);
+                                let ptype = self.parse_type();
+                                params.push((pname, ptype, modifier));
                                 
-                                while !matches!(self.current(), Token::End | Token::EOF) {
-                                    let is_public = if self.current() == Token::Pub {
-                                        self.advance();
-                                        true
-                                    } else {
-                                        false
-                                    };
-                                    
-                                    if self.current() == Token::Func {
-                                        self.advance();
-                                        
-                                        let name = if let Token::Identifier(name) = self.current() {
-                                            self.advance();
-                                            name
-                                        } else {
-                                            self.advance();
-                                            "error".to_string()
-                                        };
-                                        
-                                        self.expect(Token::LeftParen, vec![Token::RightParen, Token::Colon]);
-                                        
-                                        let mut params = Vec::new();
-                                        while self.current() != Token::RightParen && self.current() != Token::EOF {
-                                            let pname = if let Token::Identifier(pname) = self.current() {
-                                                self.advance();
-                                                pname
-                                            } else {
-                                                self.advance();
-                                                "error".to_string()
-                                            };
-                                            
-                                            self.expect(Token::Colon, vec![Token::Comma, Token::RightParen]);
-                                            let ptype = self.parse_type();
-                                            params.push((pname, ptype));
-                                            
-                                            if self.current() == Token::Comma {
-                                                self.advance();
-                                            }
-                                        }
-                                        
-                                        self.expect(Token::RightParen, vec![Token::Colon]);
-                                        
-                                        let return_type = if self.current() == Token::Arrow || self.current() == Token::Colon {
-                                            self.advance();
-                                            if self.is_type_token(self.current()) {
-                                                self.parse_type()
-                                            } else {
-                                                Type::Void
-                                            }
-                                        } else {
-                                            Type::Void
-                                        };
-                                        
-                                        functions_list.push(ExternFunction {
-                                            name,
-                                            params,
-                                            return_type,
-                                            is_public,
-                                        });
-                                    } else if self.current() == Token::End {
-                                        break;
-                                    } else {
-                                        self.advance();
-                                    }
-                                    
-                                    if self.current() == Token::Semicolon {
-                                        self.advance();
-                                    }
-                                }
-                                
-                                if self.current() == Token::End {
+                                if self.current() == Token::Comma {
                                     self.advance();
                                 }
-                                
-                                externs.push(ExternDecl::Block { 
-                                    abi, 
-                                    library, 
-                                    functions: functions_list 
-                                });
+                            }
+                            
+                            self.expect(Token::RightParen, vec![Token::Colon]);
+                            
+                            
+                            let mut body = Vec::new();
+                            let return_type = if self.current() == Token::Arrow || self.current() == Token::Colon {
+                                self.advance();
+                                if self.is_type_token(self.current()) {
+                                    self.parse_type()
+                                } else {
+                                    Type::Void
+                                }
                             } else {
-                                self.expect(Token::Func, vec![Token::Colon, Token::End]);
+                                Type::Void
+                            };
+                            
+                            while !matches!(self.current(), Token::End | Token::Func | Token::EOF) {
+                            
+                                if matches!(self.current(), Token::End | Token::Func) {
+                                    break;
+                                }
+                                
+                                body.push(self.parse_stmt());
+                                if self.current() == Token::Semicolon {
+                                    self.advance();
+                                }
+                            }
+                            
+                            if self.current() == Token::End {
+                                self.advance();
+                            }
+                            
+                            methods.push(ImplMethod {
+                                name: method_name,
+                                params,
+                                return_type,
+                                body,
+                                self_modifier,
+                                is_public,
+                            });
+                        } else if self.current() == Token::End {
+                            break;
+                        } else {
+                            self.advance();
+                        }
+                    }
+                    
+                    if self.current() == Token::End {
+                        self.advance();
+                    }
+                    
+                    impls.push(ImplBlock {
+                        struct_name,
+                        trait_name,
+                        constructor_params,
+                        constructor_body,
+                        methods,
+                    });
+                }
+
+                Token::Use => {
+                    self.advance();
+                    if let Token::Identifier(module_name) = self.current() {
+                        self.advance();
+                        uses.push(ModuleUse { module_name });
+                    } else {
+                        self.advance();
+                    }
+                }
+
+                Token::Extern => {
+                    self.advance();
+                    
+                    let abi = if let Token::String(abi) = self.current() {
+                        self.advance();
+                        abi
+                    } else {
+                        "C".to_string()
+                    };
+                    
+                    
+                    if self.current() == Token::Colon {
+                        self.advance();
+                        
+                        let mut functions_list = Vec::new();
+                        
+                        while !matches!(self.current(), Token::End | Token::EOF) {
+                            if self.current() == Token::Func {
+                                self.advance();
                                 
                                 let name = if let Token::Identifier(name) = self.current() {
                                     self.advance();
@@ -2394,6 +2495,15 @@ impl Parser {
                                 
                                 let mut params = Vec::new();
                                 while self.current() != Token::RightParen && self.current() != Token::EOF {
+                                    if self.current() == Token::TripleDot {
+                                        self.advance();
+                                        params.push(("...".to_string(), Type::TripleDot));
+                                        if self.current() == Token::Comma {
+                                            self.advance();
+                                        }
+                                        continue;
+                                    }
+                                    
                                     let pname = if let Token::Identifier(pname) = self.current() {
                                         self.advance();
                                         pname
@@ -2411,87 +2521,151 @@ impl Parser {
                                     }
                                 }
                                 
-
-                                self.expect(Token::RightParen, vec![Token::Colon]);
+                                self.expect(Token::RightParen, vec![Token::Colon, Token::Arrow]);
                                 
-                                let mut body = Vec::new();
-                                let return_type = 
-                                    if self.current() == Token::Arrow || self.current() == Token::Colon {
-                                        self.advance();
-                                        if self.is_type_token(self.current()) {
-                                            self.parse_type()
-                                        } else {
-                                            Type::Void
-                                        }
+                                let return_type = if self.current() == Token::Arrow || self.current() == Token::Colon {
+                                    self.advance();
+                                    if self.is_type_token(self.current()) {
+                                        self.parse_type()
                                     } else {
                                         Type::Void
-                                    };
-                                
-                                if self.current() == Token::Colon {
-                                    self.advance();
-                                }
-                                
-                                while !matches!(self.current(), Token::End | Token::EOF) {
-                                    body.push(self.parse_stmt());
-                                    if self.current() == Token::Semicolon {
-                                        self.advance();
                                     }
-                                }
-                                
-                                if self.current() == Token::End {
-                                    self.advance();
-                                }
-                                
-                                if body.is_empty() {
-                                    externs.push(ExternDecl::Single {
-                                        abi,
-                                        func: ExternFunction {
-                                            name,
-                                            params,
-                                            return_type,
-                                            is_public: true,
-                                        }
-                                    });
                                 } else {
-                                    externs.push(ExternDecl::SingleWithBody {
-                                        abi,
-                                        func: ExternFunctionBody {
-                                            name,
-                                            params,
-                                            return_type,
-                                            is_public: true,
-                                            body,
-                                        }
-                                    });
-                                }
+                                    Type::Void
+                                };
+                                
+                                functions_list.push(ExternFunction {
+                                    name,
+                                    params,
+                                    return_type,
+                                    is_public: false,
+                                });
+                            } else if self.current() == Token::End {
+                                break;
+                            } else {
+                                self.advance();
+                            }
+                            
+                            if self.current() == Token::Semicolon {
+                                self.advance();
                             }
                         }
-                        Token::Func => {
-                            let func = self.parse_function_with_visibility(false, true);
-                            functions.push(func);
+                        
+                        if self.current() == Token::End {
+                            self.advance();
                         }
-                        Token::Struct => {
-                            structs.push(self.parse_struct(true));
+                        
+                        externs.push(ExternDecl::Block { 
+                            abi, 
+                            library: String::new(), 
+                            functions: functions_list 
+                        });
+                    } else {
+                        
+                        let name = if let Token::Identifier(name) = self.current() {
+                            self.advance();
+                            name
+                        } else {
+                            self.advance();
+                            "error".to_string()
+                        };
+                        
+                        self.expect(Token::LeftParen, vec![Token::RightParen]);
+                        
+                        let mut params = Vec::new();
+                        while self.current() != Token::RightParen && self.current() != Token::EOF {
+                            if self.current() == Token::TripleDot {
+                                self.advance();
+                                params.push(("...".to_string(), Type::TripleDot));
+                                if self.current() == Token::Comma {
+                                    self.advance();
+                                }
+                                continue;
+                            }
+                            
+                            let pname = if let Token::Identifier(pname) = self.current() {
+                                self.advance();
+                                pname
+                            } else {
+                                self.advance();
+                                "error".to_string()
+                            };
+                            
+                            self.expect(Token::Colon, vec![Token::Comma, Token::RightParen]);
+                            let ptype = self.parse_type();
+                            params.push((pname, ptype));
+                            
+                            if self.current() == Token::Comma {
+                                self.advance();
+                            }
                         }
-                        Token::Enum => {
-                            enums.push(self.parse_enum(true));
-                        }
-                        _ => {
+                        
+                        self.expect(Token::RightParen, vec![Token::Colon, Token::Arrow, Token::Semicolon]);
+                        
+                        let return_type = if self.current() == Token::Arrow || self.current() == Token::Colon {
+                            self.advance();
+                            if self.is_type_token(self.current()) {
+                                self.parse_type()
+                            } else {
+                                Type::Void
+                            }
+                        } else {
+                            Type::Void
+                        };
+                        
+                        externs.push(ExternDecl::Single {
+                            abi,
+                            func: ExternFunction {
+                                name,
+                                params,
+                                return_type,
+                                is_public: false,
+                            },
+                        });
+                    
+                        if self.current() == Token::Semicolon {
                             self.advance();
                         }
                     }
                 }
-                
 
-
-                Token::Struct => {
-                    structs.push(self.parse_struct(false));
+                Token::Hash => {
+                    let mut attributes = Vec::new();
+                    while self.current() == Token::Hash {
+                        let (name, param) = self.parse_attribute();
+                        attributes.push(if let Some(p) = param {
+                            format!("{}({})", name, p)
+                        } else {
+                            name
+                        });
+                    }
+                    
+                    let is_public = if self.current() == Token::Pub {
+                        self.advance();
+                        true
+                    } else {
+                        false 
+                    };
+                    
+                    if self.current() == Token::Func {
+                        let func = self.parse_function_with_visibility(false, is_public, attributes);
+                        functions.push(func);
+                    } else {
+                        self.diags.push(ParseDiagnostic {
+                            message: "Expected function after attributes".to_string(),
+                            span: self.current_span(),
+                            severity: DiagnosticSeverity::Error,
+                            help: Some("Attributes are currently only supported on functions".to_string()),
+                        });
+                        self.advance();
+                    }
                 }
+
                 Token::Module => {
                     self.advance();
                     functions.push(self.parse_function(true));
                 }
-
+                
                 
                 Token::Type => {
                     self.advance();
@@ -2508,6 +2682,16 @@ impl Parser {
                         self.advance(); 
                     }
                     if self.current() == Token::End { self.advance(); }
+                }
+
+                Token::Identifier(ref id) if id == "export" => {
+                    println!("DEBUG: Parsing module exports");
+                    let export_stmt = self.parse_module_exports();
+                     
+                    modules.push(export_stmt);
+                    if self.current() == Token::Semicolon {
+                        self.advance();
+                    }
                 }
 
                 _ => {
@@ -2683,5 +2867,131 @@ impl Parser {
             _ => {}
         }
     }
+
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Token::lexer::Lexer;
+
+    fn parse_func(code: &str) -> Result<Function, String> {
+        let mut lexer = Lexer::new(code);
+        let tokens = lexer.tokenize();
+        if !lexer.errors.is_empty() {
+             return Err(format!("Lexer errors: {:?}", lexer.errors));
+        }
+        let spans = lexer.spans.clone();
+        
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut parser = Parser::new(tokens, code.to_string(), spans);
+            let func = parser.parse_function(false);
+            if !parser.diags.is_empty() {
+                Err(format!("Parser diagnostics: {:?}", parser.diags))
+            } else {
+                Ok(func)
+            }
+        }));
+
+        match result {
+            Ok(Ok(func)) => Ok(func),
+            Ok(Err(msg)) => Err(msg),
+            Err(e) => Err(format!("Parser panicked: {:?}", e)),
+        }
+    }
+
+    #[test]
+    fn test_func_parsing() {
+       let result = parse_func("func main()");
+       assert!(result.is_err(), "Expected parsing error due to missing 'end' keyword");
+    }
+
+    #[test]
+    fn test_attribute_parsing() {
+        let code = "#[Test] func test_attr() end";
+        let mut lexer = Lexer::new(code);
+        let spans = lexer.spans.clone();
+        let tokens = lexer.tokenize();
+        let mut parser = Parser::new(tokens, code.to_string(), spans);
+
+        let func = parser.parse_function_with_visibility(false, false, vec!["Test".to_string()]);
+        assert_eq!(func.name, "test_attr");
+        assert!(func.attributes.contains(&"Test".to_string()));
+    }
+
+    #[test]
+    fn test_full_game_parser() {
+        let game_render_code = r#"
+extern "stdcall" from "user32.dll":
+    func ShowWindow(hWnd: ptr[void], nCmdShow: int32): int32
+end
+
+const SW_SHOW: int32 = 5
+
+func RGB(r: uint8, g: uint8, b: uint8): uint32
+    return (r as uint32)
+end
+
+struct PlayerData:
+    mut names: str[]
+    mut count: int
+end
+
+func WindowProc(hwnd: ptr[void], msg: uint32): int
+    if msg == 2 then
+        return 0
+    end
+    return 1
+end
+
+public func add_player(name: str): int
+    return 1
+end
+"#;
+
+        let main_code = r#"
+import game_render
+
+struct Game:
+    mut current_players = int
+end
+
+impl Game:
+    func start(): Game
+        Game(current_players = 0)
+    end
+
+    func add_player(&mut self, name: str, health: int): Result[(), str]
+        return Ok()
+    end
+end
+
+func main()
+    let mut game = Game.start()
+end
+"#;
+
+        let mut lexer1 = Lexer::new(game_render_code);
+        let tokens1 = lexer1.tokenize();
+        let spans1 = lexer1.spans.clone();
+        let parser1 = Parser::new(tokens1, game_render_code.to_string(), spans1);
+        let (program1, structs1, _enums1, externs1, _imports1, _uses1, _classes1, _impls1, _traits1, _undef1, _import_decls1) = parser1.parse();
+
+        println!("Parsed: {} functions, {} structs, {} externs, {} constants", program1.functions.len(), structs1.len(), externs1.len(), program1.constants.len());
+
+        assert!(true, "Parser completed successfully");
+
+        let mut lexer2 = Lexer::new(main_code);
+        let tokens2 = lexer2.tokenize();
+        let spans2 = lexer2.spans.clone();
+        let parser2 = Parser::new(tokens2, main_code.to_string(), spans2);
+        let (program2, structs2, _enums2, _externs2, _imports2, _uses2, _classes2, impls2, _traits2, _undef2, _import_decls2) = parser2.parse();
+        
+        println!("Main parsed: {} functions, {} structs, {} impls", program2.functions.len(), structs2.len(), impls2.len());
+        assert!(true, "Parser completed successfully on main code");
+    }
+}
+
+
+
 

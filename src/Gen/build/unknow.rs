@@ -35,7 +35,7 @@ impl Codegen {
         
          
         match (&var_ty, &val_ty) {
-            (Type::ConstStr, Type::Str { .. }) => {
+            (Type::ConstStr { .. }, Type::Str { .. }) => {
                  
                 body.push_str(&format!("{} = {}.ptr;\n", c_name, val_var));
             }
@@ -48,68 +48,11 @@ impl Codegen {
         Ok(())
     }
 
-
-
     pub fn codegen_compound_assign(&mut self, name: &str, op: &str, value: &Expr, body: &mut String, loc: SourceLocation) -> Result<(), ()> {
-        let (val_var, val_ty) = self.codegen_expr(value, body).check_error();
+        let (val_var, val_ty) = self.codegen_expr(value, body)?;
         
-        if let Some((c_name, var_ty)) = self.vars.get(name) {
-            if matches!(var_ty, Type::Void) || matches!(val_ty, Type::Void) {
-                self.diagnostics.error(
-                    "VoidOperation",
-                    "Cannot perform compound assignment on void type",
-                    void_operation_error(op, loc)
-                );
-                return Err(());
-            }
-            
-            let c_name = c_name.clone();
-
-            if op == "+=" {
-                match (&var_ty, &val_ty) {
-                    (Type::Array { element: arr_elem, .. }, Type::Array { element: val_elem, .. }) => {
-                        if !self.types_compatible(arr_elem, val_elem) {
-                            self.diagnostics.error(
-                                "TypeMismatch",
-                                &format!("Cannot append {}[] to {}[]", val_elem.name(), arr_elem.name()),
-                                ErrorContext {
-                                    primary_location: loc,
-                                    secondary_locations: vec![],
-                                    help_message: Some("Array elements must have the same type".to_string()),
-                                    suggestions: vec![
-                                        "Convert elements to matching type".to_string(),
-                                    ],
-                                }
-                            );
-                            return Err(());
-                        }
-                        
-                        let c_name_clone = c_name.clone();
-                        let arr_elem_clone = arr_elem.clone();
-
-                        self.codegen_extend(&c_name_clone, &val_var, &arr_elem_clone, body);
-                        return Ok(());
-                    }
-
-                    (Type::StdStr, Type::Str { .. } | Type::ConstStr) => {
-                        body.push_str(&format!("String_push_str(&{}, {});\n", c_name, val_var));
-                        return Ok(());
-                    }
-                    (Type::StdStr, Type::StdStr) => {
-                        body.push_str(&format!("String_push_str(&{}, String_as_str(&{}));\n", c_name, val_var));
-                        return Ok(());
-                    }
-                    (Type::StdStr, Type::Char { .. }) => {
-                        body.push_str(&format!("String_push(&{}, {});\n", c_name, val_var));
-                        return Ok(());
-                    }
-                    
-                    _ => {}
-                }
-            }
-            
-            body.push_str(&format!("{} {} {};\n", c_name, op, val_var));
-            Ok(())
+        let (c_name, var_ty) = if let Some((c, t)) = self.vars.get(name) {
+            (c.clone(), t.clone())
         } else {
             self.diagnostics.error(
                 "UndefinedVariable",
@@ -121,19 +64,115 @@ impl Codegen {
                     suggestions: vec![format!("Declare '{}' before using compound assignment", name)],
                 }
             );
-            Err(())
-        }
-    }
-    pub fn codegen_call_expr(&mut self, func: &str, args: &[Expr], body: &mut String, loc: SourceLocation) -> Result<(String, Type), ()> {
-        eprintln!("[DEBUG] codegen_call_expr: func_name={}", func);
+            return Err(());
+        };
 
-        if self.structs.contains_key(func) {
-            let constructor_name = format!("{}_new", func);
+        if matches!(var_ty, Type::Void) || matches!(val_ty, Type::Void) {
+            self.diagnostics.error(
+                "VoidOperation",
+                "Cannot perform compound assignment on void type",
+                void_operation_error(op, loc)
+            );
+            return Err(());
+        }
+
+        if op == "+=" {
+            match (&var_ty, &val_ty) {
+                 
+                (Type::Array { element: arr_elem, .. }, Type::Array { element: val_elem, .. }) => {
+                    if self.types_compatible(arr_elem, val_elem) {
+                        self.codegen_extend_unified(&c_name, &val_var, body);
+                        return Ok(());
+                    }
+
+                     
+                     
+                     
+                     
+                     
+                     if (matches!(**arr_elem, Type::Str { .. }) && matches!(**val_elem, Type::StdStr)) ||
+                        (matches!(**arr_elem, Type::StdStr) && matches!(**val_elem, Type::Str { .. } | Type::ConstStr)) {
+                             self.codegen_extend_unified(&c_name, &val_var, body);
+                             return Ok(());
+                     }
+
+                    self.diagnostics.error(
+                        "TypeMismatch",
+                        &format!("Cannot append {}[] to {}[]", val_elem.name(), arr_elem.name()),
+                         ErrorContext {
+                            primary_location: loc,
+                            secondary_locations: vec![],
+                             help_message: Some("Array elements must have compatible types".to_string()),
+                            suggestions: vec!["Convert elements to matching type".to_string()],
+                        }
+                    );
+                    return Err(());
+                }
+                
+                 
+                (Type::Array { element: arr_elem, .. }, elem_ty) => {
+                     
+                    if self.types_compatible(arr_elem, elem_ty) {
+                        self.codegen_push_unified(&c_name, &val_var, body);
+                         return Ok(());
+                    }
+                    
+                     
+                    if matches!(**arr_elem, Type::Str { .. }) && matches!(*elem_ty, Type::StdStr) {
+                          
+                          
+                          
+                          
+                          
+                         self.codegen_push_unified(&c_name, &val_var, body);
+                         return Ok(());
+                    }
+                }
+
+                 
+                (Type::Str { .. }, Type::Str { .. } | Type::ConstStr) => {
+                     self.codegen_str_append_zero_alloc(&c_name, &val_var, body);
+                     return Ok(());
+                }
+
+                (Type::Str { .. }, Type::StdStr) => {
+                      
+                      
+                      
+                     self.codegen_str_append_zero_alloc(&c_name, &val_var, body);
+                     return Ok(());
+                }
+                (Type::StdStr, Type::Str { .. } | Type::ConstStr | Type::StdStr) => {
+                    self.codegen_str_append_zero_alloc(&c_name, &val_var, body);
+                    return Ok(());
+                }
+
+                _ => {}
+            }
+        }
+        
+        body.push_str(&format!("{} {} {};\n", c_name, op, val_var));
+        Ok(())
+    }
+
+    pub fn codegen_call_expr(&mut self, func: &str, args: &[Expr], body: &mut String, loc: SourceLocation) -> Result<(String, Type), ()> {
+        eprintln!("[DEBUG] codegen_call_expr: original func_name={}", func);
+        
+        
+        let resolved_func = self.resolve_function_name(func);
+        
+        if resolved_func != func {
+            eprintln!("[DEBUG] codegen_call_expr: resolved {} -> {}", func, resolved_func);
+        }
+
+        
+        if self.structs.contains_key(&resolved_func) {
+            let constructor_name = format!("{}_new", resolved_func);
             
             let mut arg_vars = Vec::new();
             
             if args.is_empty() {
-                if let Some(struct_info) = self.structs.get(func) {
+                if let Some(struct_info) = self.structs.get(&resolved_func) {
                     for (_, field_ty, _) in &struct_info.fields {
                         let default_val = match field_ty {
                             Type::Int { .. } => "0",
@@ -148,7 +187,7 @@ impl Codegen {
                 }
             } else {
                 for arg in args {
-                    let (var, _ty) = self.codegen_expr(arg, body).check_error();
+                    let (var, _ty) = self.codegen_expr(arg, body)?;
                     arg_vars.push(var);
                 }
             }
@@ -156,11 +195,11 @@ impl Codegen {
             let tmp = self.fresh_var();
             let args_str = arg_vars.join(", ");
             
-            body.push_str(&format!("{} {} = {}({});\n", func, tmp, constructor_name, args_str));
-            return Ok((tmp, Type::Struct { name: func.to_string() }));
+            body.push_str(&format!("{} {} = {}({});\n", resolved_func, tmp, constructor_name, args_str));
+            return Ok((tmp, Type::Struct { name: resolved_func.to_string() }));
         }
 
-            
+        
         if self.linked_libraries.contains(&func.to_string()) {
             self.diagnostics.error(
                 "InvalidLibraryCall",
@@ -181,230 +220,18 @@ impl Codegen {
             return Err(());
         }
 
+        
         match func {
-            "print" => {
-                let mut format_str = String::new();
-                let mut arg_list = Vec::new();
-                let mut has_r = false;
-                for (i, arg) in args.iter().enumerate() {
-                    let (var, ty) = self.codegen_expr(arg, body).check_error();
-                    match ty {
-                        Type::Int { .. } => {
-                            format_str.push_str("%d");
-                            arg_list.push(var);
-                        }
-                        Type::StdStr => {
-                            format_str.push_str("%.*s");
-                            arg_list.push(format!("(int){}.len", var));
-                            arg_list.push(format!("{}.ptr", var));
-                        }
-                        Type::Float { .. } => {
-                            format_str.push_str("%f");
-                            arg_list.push(var);
-                        }
-                        Type::Str { .. } => {
-                            format_str.push_str("%s");
-                            arg_list.push(format!("{}.ptr", var));
-                            if let Expr::String(s) = arg && s.contains('\r') { has_r = true; }
-                        }
-                        Type::ConstStr => {
-                            format_str.push_str("%s");
-                            arg_list.push(var);
-                            if let Expr::String(s) = arg && s.contains('\r') { has_r = true; }
-                        }
-                        Type::Bool => {
-                            format_str.push_str("%s");
-                            arg_list.push(format!("({} ? \"true\" : \"false\")", var));
-                        }
-                        Type::Char { .. } => {
-                            format_str.push_str("%c");
-                            arg_list
-                            .push(var);
-                        }
-                        Type::Array { element, .. } => {
-                            let loop_var = self.fresh_var();
-                            body.push_str(&format!("for (size_t {} = 0; {} < {}.len; {}++) {{\n", loop_var, loop_var, var, loop_var));
-                            body.push_str(&format!("  if ({} > 0) printf(\" \");\n", loop_var));
-
-                            match element.as_ref() {
-                                Type::Str { .. } | Type::ConstStr => {
-                                    body.push_str(&format!("  printf(\"%.*s\", (int){}.ptr[{}].len, {}.ptr[{}].ptr);\n",  var, loop_var, var, loop_var));
-                                }
-                                Type::Int { .. } => {
-                                    body.push_str(&format!("  printf(\"%d\", {}.ptr[{}]);\n", var, loop_var));
-                                }
-                                _ => {
-                                    body.push_str(&format!("printf(\"%p\", {}.ptr[{}]);\n", var, loop_var));
-                                }
-                            }
-                            body.push_str("}\n");
-                            continue;  
-                        }
-                        _ => {
-                            format_str.push_str("%p");
-                            arg_list.push(var);
-                        }
-                    }
-                    if i < args.len() - 1 {
-                        format_str.push(' ');
-                    }
-                }
-                if !has_r {
-                    format_str.push_str("\\n");
-                }
-                
-                let tmp = self.fresh_var();
-                let args_final = if arg_list.is_empty() { String::new() } else { format!(", {}", arg_list.join(", ")) };
-                body.push_str(&format!("int32_t {} = printf(\"{}\"{});\n", tmp, format_str, args_final));
-                Ok((tmp, Type::i32()))
-            }
-            "format" => {
-                let mut arg_vars = Vec::new();
-                for arg in args {
-                    let (var, ty) = self.codegen_expr(arg, body).check_error();
-                    match ty {
-                        Type::Str { .. } => arg_vars.push(var),  
-                        Type::ConstStr => arg_vars.push(format!("vix_string_from_const({})", var)),
-                        _ => arg_vars.push(var),
-                    }
-                }
-                let tmp = self.fresh_var();
-                let args_str = arg_vars.join(", ");
-                let ty = Type::Str { len_type: Box::new(Type::i64()) };
-                let c_type = ty.to_c_type(&self.arch, &mut self.type_registry);
-                body.push_str(&format!("{} {} = vix_format({});\n", c_type, tmp, args_str));
-                Ok((tmp, ty))
-            }
-            
-            "chars" => {
-                if args.len() != 1 { return Err(()); }
-                self.codegen_chars(&args[0], body)
-            }
-
-            "str" | "string" | "String" => {
-                if args.len() != 1 { return Err(()); }
-                self.ensure_string_typedef();
-                self.ensure_to_string_helpers();
-                let (var, ty) = self.codegen_expr(&args[0], body).check_error();
-                eprintln!("[DEBUG] string() arg type: {:?}", ty.name());
-                match ty {
-                    Type::Int { .. } => {
-                        let tmp = self.fresh_var();
-                        let ty = Type::Str { len_type: Box::new(Type::i64()) };
-                        let c_type = ty.to_c_type(&self.arch, &mut self.type_registry);
-                        body.push_str(&format!("{} {} = vix_int_to_str({});\n", c_type, tmp, var));
-                        Ok((tmp, ty))
-                    }
-                    Type::Str { .. } => Ok((var, ty)),
-                    Type::ConstStr => {
-                        let tmp = self.fresh_var();
-                        let ty = Type::Str { len_type: Box::new(Type::i64()) };
-                        let c_type = ty.to_c_type(&self.arch, &mut self.type_registry);
-                        body.push_str(&format!("{} {} = vix_string_from_const({});\n", c_type, tmp, var));
-                        Ok((tmp, ty))
-                    }
-                    _ => {
-                         
-                         
-                        Err(())
-                    }
-                }
-            }
-            "have" | "contain" | "contains" | "has" => {
-                if args.len() != 2 { return Err(()); }
-                self.codegen_have(&args[0], &args[1], body)
-            }
-            "is_not_empty" => {
-                if args.len() != 1 { return Err(()); }
-                self.codegen_is_not_empty(&args[0], body)
-            }
-            "collect" => {
-                if args.len() != 1 { return Err(()); }
-                self.codegen_collect(&args[0], body)
-            }
-            "contain_all" => {
-                if args.len() != 2 { return Err(()); }
-                if let Expr::Array(items) = &args[1] {
-                    self.codegen_contain_all(&args[0], items, body)
-                } else {
-                    Err(())
-                }
-            }
-            "index" => {
-                if args.len() < 2 { return Err(()); }
-                let (arr, indices) = args.split_first().unwrap();
-                self.codegen_index(arr, indices, body)
-            }
-            "index_of" => {
-                if args.len() != 2 { return Err(()); }
-                self.codegen_index_of(&args[0], &args[1], body)
-            }
-
-            "array" => {
-                self.codegen_array(args, body)
-            }
-            "some" => {
-                if args.len() != 1 { return Err(()); }
-                self.codegen_some(&args[0], body)
-            }
-            "none" => {
-                let expected = None;
-                self.codegen_none(expected, body)
-            }
-            "ok" => {
-                if args.len() != 1 { return Err(()); }
-                self.codegen_result_ok(&args[0], body)
-            }
-            "err" => {
-                if args.len() != 1 { return Err(()); }
-                self.codegen_result_err(&args[0], body)
-            }
-            "unwrap" => {
-                if args.len() != 1 { return Err(()); }
-                self.codegen_unwrap(&args[0], body)
-            }
-            "unwrap_or" => {
-                if args.len() != 2 { return Err(()); }
-                self.codegen_unwrap_or(&args[0], &args[1], body)
-            }
-            "is_some" | "is_none" => {
-                if args.len() != 1 { return Err(()); }
-                self.codegen_option_method(&args[0], func, body)
-            }
-            "array_get" => {
-                if args.len() != 2 { return Err(()); }
-                self.codegen_array_get(&args[0], &args[1], body)
-            }
-            "wait" => {
-                if args.len() != 1 { return Err(()); }
-                self.codegen_wait(&args[0], body)
-            }
-            "tuple" => {
-                self.codegen_tuple(args, body)
-            }
-            "is_empty" => {
-                if args.len() != 1 { return Err(()); }
-                self.codegen_is_empty(&args[0], body)
-            }
-            "filter" => {
-                if args.len() != 2 { return Err(()); }
-                self.codegen_filter(&args[0], &args[1], body)
-            }
-            "panic" => {
-                if args.len() != 1 { return Err(()); }
-                self.codegen_make_panic(&args[0], body)
-            }
             "as_bytes" => {
                 if args.len() != 1 { return Err(()); }
                 self.ensure_type_defined(&Type::u8());
-                let (obj_var, obj_ty) = self.codegen_expr(&args[0], body)?;
+                let (obj_var, _obj_ty) = self.codegen_expr(&args[0], body)?;
                 let tmp = self.fresh_var();
                 let slice_ty = Type::Array { element: Box::new(Type::u8()), size: None };
                 let slice_name = slice_ty.to_c_type(&self.arch, &mut self.type_registry);
                 body.push_str(&format!("{} {} = {{ .ptr = (uint8_t*){}.ptr, .len = {}.len }};\n", 
                     slice_name, tmp, obj_var, obj_var));
-                 
-                Ok((tmp, slice_ty))
+                return Ok((tmp, slice_ty));
             }
             "as_ptr" => {
                 if args.len() != 1 { return Err(()); }
@@ -417,7 +244,7 @@ impl Codegen {
                 };
                 body.push_str(&format!("const {}* {} = {}.ptr;\n", 
                     inner_type.to_c_type(&self.arch, &mut self.type_registry), tmp, obj_var));
-                Ok((tmp, Type::Ptr(Box::new(Type::Const(Box::new(inner_type))))))
+                return Ok((tmp, Type::Ptr(Box::new(Type::Const(Box::new(inner_type))))));
             }
             "as_mut_ptr" => {
                 if args.len() != 1 { return Err(()); }
@@ -430,112 +257,94 @@ impl Codegen {
                 };
                 body.push_str(&format!("{}* {} = {}.ptr;\n", 
                     inner_type.to_c_type(&self.arch, &mut self.type_registry), tmp, obj_var));
-                Ok((tmp, Type::MutRef(Box::new(inner_type))))
+                return Ok((tmp, Type::MutRef(Box::new(inner_type))));
             }
-
-            "to_string" => {
+            "size_of" | "sizeof" => {
                 if args.len() != 1 { return Err(()); }
-                let (obj_var, obj_ty) = self.codegen_expr(&args[0], body).check_error();
-                
-                self.ensure_string_typedef();
-                self.ensure_to_string_helpers();
-                
-                let ty = Type::Str { len_type: Box::new(Type::i64()) };
-                let c_type = ty.to_c_type(&self.arch, &mut self.type_registry);
+                let (var, _ty) = self.codegen_expr(&args[0], body)?;
                 let tmp = self.fresh_var();
-                
-                match &obj_ty {
-                    Type::Int { .. } => {
-                        body.push_str(&format!("{} {} = vix_int_to_str((int64_t){});\n", c_type, tmp, obj_var));
-                    }
-                    Type::Float { .. } => {
-                        body.push_str(&format!("{} {} = vix_float_to_str((double){});\n", c_type, tmp, obj_var));
-                    }
-                    Type::Bool => {
-                        body.push_str(&format!("{} {} = vix_bool_to_str({});\n", c_type, tmp, obj_var));
-                    }
-                    Type::Str { .. } | Type::ConstStr => {
-                        return Ok((obj_var, ty));
-                    }
-                    _ => {
-                         body.push_str(&format!("{} {} = {{ .ptr = \"<object>\", .len = 8 }};\n", c_type, tmp));
-                    }
-                }
-                
-                Ok((tmp, ty))
+                body.push_str(&format!("size_t {} = sizeof({});\n", tmp, var));
+                return Ok((tmp, Type::Int { bits: 64, signed: false }));
             }
             _ => {
-                self.codegen_std_call(func, args, body, loc)
+                
+                
+                let param_types = if let Some(ext_info) = self.extern_functions.get(&resolved_func) {
+                    Some(ext_info.params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>())
+                } else if let Some((params, _)) = self.user_functions.get(&resolved_func) {
+                    Some(params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>())
+                } else {
+                    None
+                };
+
+                let mut arg_vars = Vec::new();
+                
+                for (i, arg) in args.iter().enumerate() {
+                    let (mut var, ty) = self.codegen_expr(arg, body)?;
+                    
+                    
+                    if let Some(params) = &param_types {
+                        if let Some(param_ty) = params.get(i) {
+                            let needs_ptr = match param_ty {
+                                Type::ConstStr => true,
+                                Type::Ptr(inner) => {
+                                    matches!(inner.as_ref(), Type::Const(t) if matches!(t.as_ref(), Type::Char { .. }))
+                                }
+                                _ => false
+                            };
+                            
+                            if needs_ptr && matches!(ty, Type::Str { .. }) {
+                                var = format!("{}.ptr", var);
+                            }
+                        }
+                    } else {
+                        
+                        if matches!(ty, Type::Str { .. }) {
+                            var = format!("{}.ptr", var);
+                        }
+                    }
+                    
+                    arg_vars.push(var);
+                }
+
+                
+                self.codegen_std_call(&resolved_func, args, body, loc)
             }
         }
     }
 
-    pub fn codegen_member_access(&mut self, obj: &Expr, field: &str, body: &mut String, loc: SourceLocation) -> Result<(String, Type), ()> {
-        let (obj_var, obj_ty) = self.codegen_expr(obj, body) .check_error();
+    pub fn codegen_member_access(&mut self, obj: &Expr, field: &str, body: &mut String) -> Result<(String, Type), ()> {
+        let (obj_var, obj_ty) = self.codegen_expr(obj, body)?;
         
-        if let Type::Str { .. } = &obj_ty {
-            let field_ty = if field == "ptr" {
-                Type::ConstStr
-            } else if field == "len" {
-                Type::i64()
-            } else {
-                return Err(());
-            };
-            let tmp = self.fresh_var();
-            let c_type = field_ty.to_c_type(&self.arch, &mut self.type_registry);
-            body.push_str(&format!("{} {} = {}.{};\n", c_type, tmp, obj_var, field));
-            return Ok((tmp, field_ty));
-        }
-
-        if let Some((_params, ret_ty, is_instance)) = self.impl_methods.get(&(obj_ty.name(), field.to_string())).cloned() {
-            let tmp = self.fresh_var();
-            let c_type = ret_ty.to_c_type(&self.arch, &mut self.type_registry);
-            let method_name = format!("{}_{}", obj_ty.name(), field);
-            let arg = if is_instance { format!("&{}", obj_var) } else { obj_var };
-            body.push_str(&format!("{} {} = {}({});\n", c_type, tmp, method_name, arg));
-            return Ok((tmp, ret_ty));
-        } else if let Some((_params, ret_ty)) = self.user_functions.get(field).cloned() {
-            let tmp = self.fresh_var();
-            let c_type = ret_ty.to_c_type(&self.arch, &mut self.type_registry);
-            body.push_str(&format!("{} {} = {}({});\n", c_type, tmp, field, obj_var));
-            return Ok((tmp, ret_ty));
-        } else if let Some(ext_info) = self.extern_functions.get(field).cloned() {
-            let tmp = self.fresh_var();
-            let c_type = ext_info.return_type.to_c_type(&self.arch, &mut self.type_registry);
-            body.push_str(&format!("{} {} = {}({});\n", c_type, tmp, field, obj_var));
-            return Ok((tmp, ext_info.return_type));
-        }
-
         let struct_name = match &obj_ty {
             Type::Struct { name } => name.clone(),
-            Type::Ref(inner) | Type::MutRef(inner) | Type::Ptr(inner) => {
+            Type::Ref(inner) | Type::MutRef(inner) => {
                 if let Type::Struct { name } = &**inner {
                     name.clone()
                 } else {
-                    return Err(())
+                    return Err(());
                 }
             }
             _ => return Err(()),
         };
 
+         
         let field_ty = if let Some(struct_info) = self.structs.get(&struct_name) {
-            if let Some(field_info) = struct_info.fields.iter().find(|f| f.0 == field) {
-                field_info.1.clone()
-            } else {
-                Type::i32()  
-            }
+            struct_info.fields.iter()
+                .find(|f| f.0 == field)
+                .map(|f| f.1.clone())
+                .unwrap_or(Type::i32())
         } else {
-            Type::i32()  
+            Type::i32()
         };
 
         let tmp = self.fresh_var();
-        let op = if matches!(obj_ty, Type::Ref(_) | Type::MutRef(_) | Type::Ptr(_)) { "->" } else { "." };
+        let op = if matches!(obj_ty, Type::Ref(_) | Type::MutRef(_)) { "->" } else { "." };
         
         let c_type = field_ty.to_c_type(&self.arch, &mut self.type_registry);
         body.push_str(&format!("{} {} = {}{}{};\n", c_type, tmp, obj_var, op, field));
         Ok((tmp, field_ty))
     }
-
     pub fn codegen_cast_target(&mut self, expr: &Expr, target: &CastTarget, body: &mut String, loc: SourceLocation) -> Result<(String, Type), ()> {
         if let CastTarget::Type(ty) = target {
             self.codegen_cast(expr, ty, body, loc)
@@ -545,8 +354,8 @@ impl Codegen {
     }
 
     pub fn codegen_index_assign(&mut self, arr: &Expr, indices: &[Expr], value: &Expr, body: &mut String, _loc: SourceLocation) -> Result<(), ()> {
-        let (arr_var, arr_ty) = self.codegen_expr(arr, body).check_error();
-        let (val_var, _val_ty) = self.codegen_expr(value, body).check_error();
+        let (arr_var, arr_ty) = self.codegen_expr(arr, body)?;
+        let (val_var, _val_ty) = self.codegen_expr(value, body)?;
         
          
         let is_slice = matches!(arr_ty, Type::Array { size: None, .. } | Type::Str { .. });
@@ -558,7 +367,7 @@ impl Codegen {
         };
         
         for idx in indices {
-            let (idx_var, _idx_ty) = self.codegen_expr(idx, body).check_error();
+            let (idx_var, _idx_ty) = self.codegen_expr(idx, body)?;
             index_str = format!("{}[{}]", index_str, idx_var);
         }
         
@@ -568,58 +377,72 @@ impl Codegen {
     }
 
     pub fn codegen_member_assign(&mut self, obj: &Expr, field: &str, value: &Expr, body: &mut String, _loc: SourceLocation) -> Result<(), ()> {
-        let (obj_var, obj_ty) = self.codegen_expr(obj, body).check_error();
-        let (val_var, _val_ty) = self.codegen_expr(value, body).check_error();
+        let (obj_var, obj_ty) = self.codegen_expr(obj, body)?;
+        let (val_var, _val_ty) = self.codegen_expr(value, body)?;
 
-        let op = if matches!(obj_ty, Type::Ref(_) | Type::MutRef(_) | Type::Ptr(_)) { "->" } else { "." };
+        let op = if matches!(obj_ty, Type::Ref(_) | Type::MutRef(_)) { "->" } else { "." };
         body.push_str(&format!("{}{}{} = {};\n", obj_var, op, field, val_var));
 
         Ok(())
     }
 
+
     pub fn codegen_call_stmt(&mut self, func: &str, args: &[Expr], body: &mut String, loc: SourceLocation) -> Result<(), ()> {
-        match func {
-             
-            "print" | "println" | "plan" | "chars" | "str" | "string" | 
-            "have" | "contain" | "contains" | "has" | "is_not_empty" | 
-            "collect" | "contain_all" | "index" | "index_of" | "array" | 
-            "some" | "none" | "ok" | "err" | "unwrap" | "unwrap_or" | 
-            "is_some" | "is_none" | "array_get" | "wait" | "tuple" | 
-            "is_empty" | "filter" | "panic" | "as_bytes" | "as_ptr" | 
-            "as_mut_ptr" | "to_string" => {
-                self.codegen_call_expr(func, args, body, loc)?;
-                return Ok(());
-            }
-            _ => {}
-        }
-        
-        let mut arg_vars = Vec::new();
-        
-        let param_types = if let Some(ext_info) = self.extern_functions.get(func) {
-            Some(ext_info.params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>())
-            } else if let Some((params, _)) = self.user_functions.get(func) {
-                Some(params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>())
-            } else {
-            None
-        };
-
-        for (i, arg) in args.iter().enumerate() {
-            let (mut var, ty) = self.codegen_expr(arg, body).check_error();
-            
-            if let Some(params) = &param_types
-                && let Some(param_ty) = params.get(i)
-                    && (matches!(param_ty, Type::ConstStr) || matches!(param_ty, Type::Ptr(_) | Type::RawPtr(_) | Type::Ref(_) | Type::MutRef(_))) && matches!(ty, Type::Str { .. }) {
-                        var = format!("{}.ptr", var);
-                    }
-            
-            arg_vars.push(var);
-        }
-
-        let args_str = arg_vars.join(", ");
-        body.push_str(&format!("{}({});\n", func, args_str));
-
-        Ok(())
+    eprintln!("[DEBUG] codegen_call_stmt: original func_name={}", func);
+    
+     
+    let resolved_func = self.resolve_function_name(func);
+    
+    if resolved_func != func {
+        eprintln!("[DEBUG] codegen_call_stmt: resolved {} -> {}", func, resolved_func);
     }
+    
+    let mut arg_vars = Vec::new();
+    
+     
+    let param_types = if let Some(ext_info) = self.extern_functions.get(&resolved_func) {
+        Some(ext_info.params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>())
+    } else if let Some((params, _)) = self.user_functions.get(&resolved_func) {
+        Some(params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>())
+    } else {
+        None
+    };
+
+    for (i, arg) in args.iter().enumerate() {
+        let (mut var, ty) = self.codegen_expr(arg, body)?;
+        
+         
+        if let Some(params) = &param_types {
+            if let Some(param_ty) = params.get(i) {
+                let needs_ptr = match param_ty {
+                    Type::ConstStr => true,
+                    Type::Ptr(inner) => {
+                        matches!(inner.as_ref(), Type::Const(t) if matches!(t.as_ref(), Type::Char { .. }))
+                    }
+                    _ => false
+                };
+                
+                if needs_ptr && matches!(ty, Type::Str { .. }) {
+                    var = format!("{}.ptr", var);
+                }
+            }
+        } else {
+             
+            if matches!(ty, Type::Str { .. }) {
+                var = format!("{}.ptr", var);
+            }
+        }
+        
+        arg_vars.push(var);
+    }
+
+    let args_str = arg_vars.join(", ");
+    
+     
+    body.push_str(&format!("{}({});\n", resolved_func, args_str));
+
+    Ok(())
+}
 
     pub fn codegen_program(&mut self, functions: &[Function]) -> Result<(), ()> {
         for func in functions {
@@ -660,8 +483,7 @@ impl Codegen {
             let tmp = self.fresh_var();
             let args_str = arg_vars.join(", ");
 
-            body.push_str(&format!("{} {} = {}({});\n", 
-                type_name, tmp, constructor_name, args_str));
+            body.push_str(&format!("{} {} = {}({});\n", type_name, tmp, constructor_name, args_str));
             
             return Ok((tmp, Type::Struct { name: type_name.to_string() }));
         }
@@ -704,7 +526,7 @@ impl Codegen {
     }
         
     pub fn codegen_cast(&mut self, expr: &Expr, target_ty: &Type, body: &mut String, loc: SourceLocation) -> Result<(String, Type), ()> {
-        let (var, source_ty) = self.codegen_expr(expr, body) .check_error();
+        let (var, source_ty) = self.codegen_expr(expr, body) ?;
 
         if matches!(source_ty, Type::Ptr(_)) && !matches!(target_ty, Type::Ptr(_) | Type::RawPtr(_)) {
             self.diagnostics.warning(
@@ -735,7 +557,12 @@ impl Codegen {
             (Type::Str { .. }, Type::Str { .. }) => true,
             (Type::ConstStr, Type::ConstStr) => true,
             (Type::ConstStr, Type::Str { .. }) => true,
+            (Type::ConstStr, Type::StdStr) => true,
             (Type::Str { .. }, Type::ConstStr) => true,
+            (Type::StdStr, Type::ConstStr) => true,
+            (Type::StdStr, Type::StdStr) => true,
+            (Type::Str { .. }, Type::StdStr) => true,
+            (Type::StdStr, Type::Str { .. }) => true,
             (Type::Ptr(inner1), Type::Ptr(inner2)) => self.types_compatible(inner1, inner2),
             (Type::Struct { name: n1 }, Type::Struct { name: n2 }) => n1 == n2,
             (Type::Array { element: e1, size: s1 }, Type::Array { element: e2, size: s2 }) => {
@@ -796,32 +623,30 @@ impl Codegen {
             "."
         };
 
-        if op == "+="
-            && let Type::Struct { name: struct_name } = struct_ty
-                && let Some(struct_info) = self.structs.get(struct_name)
-                    && let Some((_, field_ty, _)) = struct_info.fields.iter()
-                        .find(|(fname, _, _)| fname == field)
-                        && matches!(field_ty, Type::StdStr) {
-                            match &val_ty {
-                                Type::StdStr => {
-                                    body.push_str(&format!("String_extend(&{}{}{}, &{});\n", obj_var, access_op, field, val_var));
-                                }
-                                Type::Str { .. } | Type::ConstStr => {
-                                    body.push_str(&format!("String_push_str(&{}{}{}, {});\n", obj_var, access_op, field, val_var));
-                                }
-                                Type::Char { .. } => {
-                                    body.push_str(&format!("String_push(&{}{}{}, {});\n", obj_var, access_op, field, val_var));
-                                }
-                                _ => {
-                                    self.ensure_to_string_helpers();
-                                    let tmp = self.fresh_var();
-                                    body.push_str(&format!("String {} = to_string_generic({});\n", tmp, val_var));
-                                    body.push_str(&format!("String_push_str(&{}{}{}, {});\n", 
-                                        obj_var, access_op, field, tmp));
-                                }
-                            }
-                            return Ok(());
+        if op == "+=" {
+            if let Type::Struct { name: struct_name } = struct_ty {
+                if let Some(struct_info) = self.structs.get(struct_name) {
+                    if let Some((_, field_ty, _)) = struct_info.fields.iter()
+                        .find(|(fname, _, _)| fname == field) 
+                    {
+                        if matches!(field_ty, Type::StdStr) {
+                             self.diagnostics.error(
+                                 "UnsupportedFeature",
+                                 "String member compound assignment is not supported in No-OS mode.",
+                                 ErrorContext {
+                                     primary_location: loc,
+                                     secondary_locations: vec![],
+                                     help_message: Some("String type is deprecated.".to_string()),
+                                     suggestions: vec![],
+                                 }
+                             );
+                             return Err(());
                         }
+
+                    }
+                }
+            }
+        }
 
         body.push_str(&format!("{}{}{} {} {};\n", obj_var, access_op, field, op, val_var));
         Ok(())

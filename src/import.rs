@@ -17,7 +17,7 @@ pub use crate::Library::manager::FunctionSignature;
 pub use crate::Token::storge::token::Token;
 pub use crate::Token::storge::ast::{Stmt, Function, ExternDecl, ExternFunction, ExternFunctionBody, CodegenConfig, CompilationMode, OptimizationLevel,
     StructDef, StructField, TraitDef, TraitMethod, ImplBlock, ImplMethod, ExternFunctionMap,
-    ModuleImport, ModuleUse, ImportDecl, MatchCase, CastTarget, Codegen,
+    ModuleImport, ModuleUse, ImportDecl, MatchCase, CastTarget, Codegen, DiagnosticSeverity, ParseDiagnostic,
     ParamModifier, SelfModifier, Program, UndefinedFunction, UndefinedFunctions, ClassDef, Parser, EnumDef, EnumVariant, GlobalConst, FunctionInfo
 };
 pub use crate::Gen::codegen::ErrorCheck;

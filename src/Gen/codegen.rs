@@ -52,7 +52,10 @@ where
     fn check_error(self) -> T {
         match self {
             Ok(value) => value,
-            Err(_) => T::from(CodegenResult::default())
+            Err(_) => {
+                eprintln!("[Internal Codegen Error] Silent failure converted to default value");
+                T::from(CodegenResult::default())
+            }
         }
     }
 }
@@ -94,14 +97,12 @@ impl Codegen {
             module_function_signatures: HashMap::new(),
             module_init_functions: Vec::new(),
             current_return_type: None,
+            import_function_map: HashMap::new(),
         }
     }
 
     pub fn ensure_type_defined(&mut self, ty: &Type) {
     match ty {
-        Type::Str { .. } | Type::ConstStr => {
-            self.ensure_string_typedef();
-        }
         Type::Array { element, .. } => {
             self.ensure_type_defined(element);
             
@@ -231,8 +232,16 @@ impl Codegen {
                 Ok(())
             }
             Stmt::MemberCompoundAssign(obj, field, op, value) => {self.codegen_member_compound_assign(obj, field, op, value, body, loc)}
+            Stmt::TypeAlias { .. } => {
+                 
+                Ok(())
+            }
+            Stmt::ModuleExports { .. } => {
+                 
+                Ok(())
+            }
             Stmt::Expr(expr) => {
-                self.codegen_expr(expr, body).check_error();
+                self.codegen_expr(expr, body)?;
                 Ok(())
             }
             _ => {
@@ -284,80 +293,16 @@ impl Codegen {
                 eprintln!("[DEBUG] codegen.rs Expr::Call: {}", func);
                 self.codegen_call_expr(func, args, body, loc)
             },
-            Expr::Array(elements) => self.codegen_array(elements, body),
-            Expr::MemberAccess(obj, field) => self.codegen_member_access(obj, field, body, loc),
-            Expr::ResultOk(inner) => {self.codegen_result_ok(inner, body)}
-            Expr::ResultErr(inner) => {self.codegen_result_err(inner, body)}
+            Expr::MemberAccess(obj, field) => self.codegen_member_access(obj, field, body),
             Expr::Not(expr) => self.codegen_not(expr, body).map_err(|_| ()),
             Expr::Tuple(elements) => self.codegen_tuple(elements, body),
             Expr::MethodCall(obj, method, args) => self.codegen_method_call(obj, method, args, body, loc),
-            Expr::ModuleCall(module, func, args) => self.codegen_module_call(module, func, args, body, loc),
             Expr::Cast(expr, target) => self.codegen_cast_target(expr, target, body, loc),
             Expr::StaticMethodCall(type_name, method, args) => {self.codegen_static_method(type_name, method, args, body, loc)}
-            Expr::MethodCall(obj, method, args) => {
-                let (obj_var, obj_ty) = self.codegen_expr(obj, body)?;
-                let struct_name = match &obj_ty {
-                    Type::Struct { name } => name.clone(),
-                    _ => return Err(()),
-                };
-                
-                let method_name = format!("{}_{}", struct_name, method);
-                let mut arg_vars = vec![format!("&{}", obj_var)];
-                
-                for arg in args {
-                    let (var, _) = self.codegen_expr(arg, body)?;
-                    arg_vars.push(var);
-                }
-                
-                let return_type = self.impl_methods
-                    .get(&(struct_name, method.to_string()))
-                    .map(|(_, ret_ty, _)| ret_ty.clone())
-                    .unwrap_or(Type::i32());
-                
-                let tmp = self.fresh_var();
-                let c_type = return_type.to_c_type(&self.arch, &mut self.type_registry);
-                body.push_str(&format!("{} {} = {}({});\n", 
-                    c_type, tmp, method_name, arg_vars.join(", ")));
-                
-                Ok((tmp, return_type))
-            }
+            Expr::ModuleCall(module, func, args) => {
+                self.codegen_module_call(module, func, args, body, loc).ok();
 
-            Expr::Call(name, args) if self.structs.contains_key(name) && args.is_empty() => {
-                 
-                let constructor_name = format!("{}_new", name);
-                let struct_info = self.structs.get(name).unwrap();
-                
-                let mut default_args = Vec::new();
-                for (_, field_ty, _) in &struct_info.fields {
-                    let default_val = match field_ty {
-                        Type::Int { .. } => "0",
-                        Type::Str { .. } => "(Slice_char){ .ptr = \"\", .len = 0 }",
-                        _ => "{ 0 }",
-                    };
-                    default_args.push(default_val.to_string());
-                }
-                
-                let tmp = self.fresh_var();
-                body.push_str(&format!("{} {} = {}({});\n", 
-                    name, tmp, constructor_name, default_args.join(", ")));
-                
-                Ok((tmp, Type::Struct { name: name.clone() }))
-            }
-            Expr::Index(arr, indices) => {
-                let (arr_var, arr_ty) = self.codegen_expr(arr, body)?;
-                
-                let is_hashmap = match &arr_ty {
-                    Type::HashMap { .. } => true,
-                    Type::Ref(inner) | Type::MutRef(inner) => matches!(**inner, Type::HashMap { .. }),
-                    _ => false,
-                };
-
-                if is_hashmap
-                    && indices.len() == 1 {
-                        return self.codegen_hashmap_get(arr, &indices[0], body);
-                    }
-    
-                self.codegen_index(arr, indices, body)
+                Err(())
             }
 
             Expr::CallNamed(name, named_args) => {
@@ -366,7 +311,7 @@ impl Codegen {
                     
                     let mut arg_vars = Vec::new();
                     for (_arg_name, arg_expr) in named_args {
-                        let (var, _ty) = self.codegen_expr(arg_expr, body).check_error();
+                        let (var, _ty) = self.codegen_expr(arg_expr, body)?;
                         arg_vars.push(var);
                     }
                     
@@ -380,7 +325,7 @@ impl Codegen {
                 
                 let mut arg_vars = Vec::new();
                 for (_arg_name, arg_expr) in named_args {
-                    let (var, _ty) = self.codegen_expr(arg_expr, body).check_error();
+                    let (var, _ty) = self.codegen_expr(arg_expr, body)?;
                     arg_vars.push(var);
                 }
                 
@@ -470,16 +415,6 @@ impl Codegen {
                 let (var, ty) = self.codegen_expr(expr, body)?;
                 Ok((var, ty))
             }
-
-            Expr::None => {
-                let tmp = self.fresh_var();
-                body.push_str(&format!("void* {} = NULL;\n", tmp));
-                Ok((tmp, Type::Ptr(Box::new(Type::Void))))
-            }
-            Expr::Some(inner) => {
-                self.codegen_some(inner, body)
-            }
-
             Expr::Pipe(left, right) => {
                 let _ = self.codegen_expr(left, body)?;
                 match right.as_ref() {
@@ -521,7 +456,7 @@ pub fn codegen_library(
     externs: &[ExternDecl],
     library_includes: &[String],
 ) -> Result<String, String> {
-    println!("   {} Starting library codegen...", "→".bright_cyan());
+    println!("   {} Starting library codegen...", "success:".bright_cyan());
     
      
     for include in library_includes {
@@ -529,7 +464,7 @@ pub fn codegen_library(
         self.ir.headers.push('\n');
     }
     
-    println!("   {} Generating struct definitions...", "→".bright_black());
+    println!("   {} Generating struct definitions...", "success:".bright_black());
     
      
     for struct_def in structs {
@@ -538,25 +473,24 @@ pub fn codegen_library(
         }
     }
 
-    println!("   {} Generating enum definitions...", "→".bright_black());
+    println!("   {} Generating enum definitions...", "success:".bright_black());
     for enum_def in enums {
         if self.codegen_enum_definition(enum_def).is_err() {
             eprintln!("   {} Failed to generate enum: {}", "Error:".red(), enum_def.name);
         }
     }
 
-    println!("   {} Processing {} modules...", "→".bright_black(), program.modules.len());
+    println!("   {} Processing {} modules...", "success:".bright_black(), program.modules.len());
      
     for module in &program.modules {
         if let Stmt::ModuleDef { name, .. } = module {
-            println!("      {} Processing module: {}", "→".bright_black(), name);
+            println!("      {} Processing module: {}", "success:".bright_black(), name);
         }
-        if self.codegen_module(module).is_err() {
-            eprintln!("   {} Failed to generate module", "Error:".red());
-        }
+
+        self.codegen_module(module);
     }
 
-    println!("   {} Ensuring type definitions...", "→".bright_black());
+    println!("   {} Ensuring type definitions...", "success:".bright_black());
      
     for func in &program.functions {
         self.ensure_type_defined(&func.return_type);
@@ -574,7 +508,7 @@ pub fn codegen_library(
         }
     }
 
-    println!("   {} Generating {} function declarations...", "→".bright_black(), program.functions.len());
+    println!("   {} Generating {} function declarations...", "success:".bright_black(), program.functions.len());
      
     for func in &program.functions {
         self.codegen_function(func, true);
@@ -583,46 +517,39 @@ pub fn codegen_library(
         let _ = self.codegen_impl_block(impl_block, true);
     }
 
-    if self.codegen_externs(externs).is_err() {
-        eprintln!("   {} Failed to generate externs", "Error:".red());
-    }
 
-    println!("   {} Generating {} function implementations...", "→".bright_black(), program.functions.len());
+    println!("   {} Generating {} function implementations...", "success:".bright_black(), program.functions.len());
      
     for func in &program.functions {
-        println!("      {} Generating: {}", "→".bright_black(), func.name);
+        println!("      {} Generating: {}", "success:".bright_black(), func.name);
         self.codegen_function(func, false);
     }
 
     for impl_block in impls {
-        if let Err(_) = self.codegen_impl_block(impl_block, false) {
+        if self.codegen_impl_block(impl_block, false).is_err() {
             eprintln!("   {} Failed to generate impl block", "Error:".red());
         }
-    }
-    
-    if self.diagnostics.has_errors() {
-        println!("   {} Diagnostics has errors, printing summary...", "Error:".red());
-        self.diagnostics.print_summary();
-        return Err("Code generation failed due to errors".to_string());
     }
     
     if self.diagnostics.warning_count > 0 {
         println!("   {} {} warning(s) generated", "Warning:".yellow(), self.diagnostics.warning_count);
     }
     
-    println!("   {} Finalizing library code...", "→".bright_black());
+    println!("Hello, 'i'm confused!");
+    println!("   {} Finalizing library code...", "success:".bright_black());
     
     for def in &self.type_registry.ordered_definitions {
-        if !self.ir.forward_decls.contains(def) {
-            self.ir.forward_decls.push_str(def);
-        }
+        println!("Setting everything fortworddd!");
+        self.ir.add_type_definition(def.clone());
     }
-
-    println!("   {} Library codegen complete!", "✓".green());
-    Ok(self.ir.clone().finalize())
+    println!("   {} Library codegen complete!", "success:".green());
+    
+     
+     
+    Ok(self.ir.clone().finalize_library())
 }
 
-    pub fn codegen_program_full(
+     pub fn codegen_program_full(
         &mut self, 
         program: &Program,
         structs: &[StructDef],
@@ -638,12 +565,12 @@ pub fn codegen_library(
             self.ir.headers.push('\n');
         }
         
-        println!("   {} Processing {} library function signatures...", "→".bright_cyan(), library_functions.len());
+        println!("   {} Processing {} library function signatures...", "success:".bright_cyan(), library_functions.len());
         
+         
         for func_sig in library_functions {
-            println!("      {} Registering library function: {}", "→".bright_black(), func_sig.name);
+            println!("      {} Registering library function: {}", "success:".bright_black(), func_sig.name);
             
-             
             let param_str = if func_sig.parameters.is_empty() {
                 "void".to_string()
             } else {
@@ -661,11 +588,8 @@ pub fn codegen_library(
             self.ir.forward_decls.push_str(&c_decl);
             self.ir.forward_decls.push('\n');
             
-             
-             
             let return_type = self.parse_c_type_to_vix_type(&func_sig.return_type);
             
-             
             let params: Vec<(String, Type)> = func_sig.parameters.iter()
                 .map(|(name, ty_str)| {
                     let ty = self.parse_c_type_to_vix_type(ty_str);
@@ -673,17 +597,22 @@ pub fn codegen_library(
                 })
                 .collect();
             
-             
             self.user_functions.insert(
                 func_sig.name.clone(),
                 (params, return_type)
             );
         }
         
-            self.ensure_string_typedef();
         self.type_registry.generate_slices(&Type::char8(), &self.arch);
         
         println!("   {} Generating struct definitions...", "processing:".bright_black());
+         
+
+        self.codegen_externs(externs).ok();
+        for def in &self.type_registry.ordered_definitions {
+            println!("Setting everything fortworddd!");
+            self.ir.add_type_definition(def.clone());
+        }
         
         for struct_def in structs {
             self.codegen_struct_definition(struct_def).ok();
@@ -695,11 +624,9 @@ pub fn codegen_library(
 
         println!("   {} Processing modules...", "processing:".bright_black());
         for module in &program.modules {
-            if self.codegen_module(module).is_err() {
-            }
+            self.codegen_module(module);
         }
 
-         
         println!("   {} Pre-processing type definitions...", "processing:".bright_black());
         for func in &program.functions {
             self.ensure_type_defined(&func.return_type);
@@ -724,17 +651,16 @@ pub fn codegen_library(
             let _ = self.codegen_impl_block(impl_block, true);
         }
 
-        self.codegen_externs(externs).is_err();
+        self.codegen_externs(externs).ok();
 
         println!("   {} Generating function code...", "processing:".bright_black());
         for func in &program.functions {
             self.codegen_function(func, false);
         }
 
-        
         println!("   {} Generating impl block code...", "processing:".bright_black());
         for impl_block in impls {
-            if let Err(_) = self.codegen_impl_block(impl_block, false) {
+            if self.codegen_impl_block(impl_block, false).is_err() {
             }
         }
         
@@ -749,13 +675,11 @@ pub fn codegen_library(
         }
 
         for init_func in &self.module_init_functions {
-             self.ir.functions.push_str(&format!("    {}();\n", init_func));
+            self.ir.functions.push_str(&format!("    {}();\n", init_func));
         }
 
         Ok(self.ir.clone().finalize())
     }
-
-        
 
     pub fn parse_c_type_to_vix_type(&self, c_type: &str) -> Type {
         match c_type.trim() {
@@ -781,4 +705,100 @@ pub fn codegen_library(
             _ => Type::i32(),  
         }
     }
+
+
+       pub fn set_import_context(
+        &mut self, 
+        import_decls: &[ImportDecl],
+        library_functions: &[FunctionSignature],
+    ) {
+        println!("   {} Building import mappings...", "success:".bright_cyan());
+        
+        for decl in import_decls {
+            match decl {
+                ImportDecl::FileImport { name, from } => {
+                     
+                    let actual_name = library_functions
+                        .iter()
+                        .find(|sig| {
+                             
+                            if sig.name == *name {
+                                return true;
+                            }
+                            
+                             
+                            if sig.name.ends_with(&format!("_{}", name)) {
+                                return true;
+                            }
+                            
+                            false
+                        })
+                        .map(|sig| sig.name.clone())
+                        .unwrap_or_else(|| {
+                             
+                            println!("      {} Warning: Function '{}' from '{}' not found in libraries", 
+                                "⚠".yellow(), name, from);
+                            name.clone()
+                        });
+                    
+                    if actual_name != *name {
+                        println!("      {} Mapping: {} success: {}", 
+                            "success:".green(), 
+                            name, 
+                            actual_name
+                        );
+                    }
+                    
+                    self.import_function_map.insert(name.clone(), actual_name);
+                }
+                
+                ImportDecl::WildcardImport { from } => {
+                     
+                    println!("      {} Processing wildcard import from '{}'", "success:".bright_black(), from);
+                    
+                    for sig in library_functions {
+                         
+                         
+                         
+                        
+                        if let Some(idx) = sig.name.rfind('_') {
+                            let short_name = &sig.name[idx + 1..];
+                            self.import_function_map.insert(
+                                short_name.to_string(), 
+                                sig.name.clone()
+                            );
+                            println!("         {} {} success: {}", "success:".bright_black(), short_name, sig.name);
+                        }
+                        
+                         
+                        self.import_function_map.insert(
+                            sig.name.clone(), 
+                            sig.name.clone()
+                        );
+                    }
+                }
+                
+                ImportDecl::LibraryImport { name } => {
+                     
+                     
+                    println!("      {} Library import: {}", "success:".bright_black(), name);
+                }
+            }
+        }
+        
+        println!("   {} Import mappings complete ({} mappings)", 
+            "success:".green(), 
+            self.import_function_map.len()
+        );
+    }
+
+     
+    pub fn resolve_function_name(&self, name: &str) -> String {
+        if let Some(actual_name) = self.import_function_map.get(name) {
+            actual_name.clone()
+        } else {
+            name.to_string()
+        }
+    }
+
 }

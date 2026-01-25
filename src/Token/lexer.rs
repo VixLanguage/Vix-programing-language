@@ -60,8 +60,85 @@ impl Lexer {
     fn read_char(&mut self) -> Token {
         self.advance();  
         
+         
+        let start_pos = self.pos;
+        let mut chars_count = 0;
+        let mut temp_pos = self.pos;
+        
+         
+        while temp_pos < self.chars.len() {
+            if self.chars.get(temp_pos) == Some(&'\'') {
+                break;
+            }
+            if self.chars.get(temp_pos) == Some(&'\n') {
+                break;
+            }
+            if self.chars.get(temp_pos) == Some(&'\\') {
+                temp_pos += 2;  
+                chars_count += 1;
+            } else {
+                temp_pos += 1;
+                chars_count += 1;
+            }
+        }
+        
+         
+        if chars_count > 1 {
+            let mut string = String::new();
+            
+            while let Some(ch) = self.current() {
+                if ch == '\'' {
+                    self.advance();
+                    break;
+                } else if ch == '\\' {
+                    self.advance();
+                    if let Some(escaped) = self.current() {
+                        match escaped {
+                            'n' => string.push('\n'),
+                            't' => string.push('\t'),
+                            'r' => string.push('\r'),
+                            '\\' => string.push('\\'),
+                            '\'' => string.push('\''),
+                            '0' => string.push('\0'),
+                            'x' => {
+                                self.advance();
+                                let mut hex = String::new();
+                                for _ in 0..2 {
+                                    if let Some(h) = self.current() {
+                                        if h.is_ascii_hexdigit() {
+                                            hex.push(h);
+                                            self.advance();
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                }
+                                if let Ok(val) = u8::from_str_radix(&hex, 16) {
+                                    string.push(val as char);
+                                } else {
+                                    string.push('?');
+                                }
+                                continue;
+                            }
+                            _ => {
+                                let c = escaped;
+                                string.push(c);
+                            }
+                        }
+                        self.advance();
+                    }
+                } else {
+                    string.push(ch);
+                    self.advance();
+                }
+            }
+            
+            return Token::String(string);
+        }
+        
+         
         let ch = if self.current() == Some('\\') {
-            self.advance();  
+            self.advance();
             match self.current() {
                 Some('n') => { self.advance(); '\n' }
                 Some('t') => { self.advance(); '\t' }
@@ -85,7 +162,7 @@ impl Lexer {
                     if let Ok(val) = u8::from_str_radix(&hex, 16) {
                         val as char
                     } else {
-                        '?'  
+                        '?'
                     }
                 }
                 _ => {
@@ -100,7 +177,6 @@ impl Lexer {
             c
         };
         
-        
         if self.current() == Some('\'') {
             self.advance();
         } else {
@@ -112,6 +188,7 @@ impl Lexer {
         
         Token::Char(ch as i32)
     }
+
 
     fn read_number(&mut self) -> Token {
         let _start = self.pos;
@@ -276,9 +353,8 @@ impl Lexer {
             }
         }
 
- 
         let is_type_ident = ident.chars().next().is_some_and(|c| c.is_lowercase()) &&
-                           (ident.starts_with("int") || 
+                        (ident.starts_with("int") || 
                             ident.starts_with("uint") || 
                             ident.starts_with("float")
                         );
@@ -287,7 +363,7 @@ impl Lexer {
             return Token::TypeIdentifier(ident);
         }
 
- 
+         
         match ident.as_str() {
             "create" => Token::Let,
             "public" => Token::Pub,
@@ -325,7 +401,6 @@ impl Lexer {
             "const" => Token::Const,
             "mutable" => Token::Mutable,
             "reference" => Token::Reference,
-            "None" => Token::None,
             "null" => Token::Null,
             "impl" => Token::Impl,
             "self" => Token::Selfish,
@@ -334,24 +409,11 @@ impl Lexer {
             "array" => Token::Array,
             "slots" => Token::Slots,
             "lists" => Token::Lists,
-            "panic" => Token::Panic,
-            "have" => Token::Have,
-            "get" => Token::Get,
-            "filter" => Token::Filter,
-            "is_empty" => Token::IsEmpty,
-            "unwrap" => Token::Unwrap,
-            "unwrap_or" => Token::UnwrapOr,
-            "is_some" => Token::IsSome,
-            "is_none" => Token::IsNone,
-            "ok" | "Ok" => Token::Ok,
-            "err" | "Err" => Token::Err,
             "not" => Token::Not,
             "or" => Token::Or,
             "reference_to" => Token::ReferenceTo,
-            "some" | "Some" => Token::Some,
             "result" | "Result" => Token::Result,
             "option" | "Option" => Token::Option,
-            "wait" => Token::Wait,
             "nullptr" => Token::NullPtr,
             "sizeof" => Token::SizeOf,
             "typeof" => Token::TypeOf,
@@ -362,9 +424,11 @@ impl Lexer {
             "void" => Token::Void,
             "str" => Token::Str,
             "String" => Token::StdStr,
+            "usize" => Token::Usize,
+            "isize" => Token::Isize,
             "type" => Token::Type,
-            ".." => Token::DoubleDot,
- 
+
+             
             "int8" => Token::TypeIdentifier("int8".to_string()),
             "int16" => Token::TypeIdentifier("int16".to_string()),
             "int32" => Token::TypeIdentifier("int32".to_string()),
@@ -376,7 +440,14 @@ impl Lexer {
             "float32" => Token::TypeIdentifier("float32".to_string()),
             "float64" => Token::TypeIdentifier("float64".to_string()),
             "string" => Token::TypeIdentifier("string".to_string()),
+
+             
+            "None" => Token::None,
+            "Some" => Token::Some,
+            "Ok" => Token::Ok,
+            "Err" => Token::Err,
             
+             
             _ => Token::Identifier(ident),
         }
     }
@@ -444,6 +515,7 @@ impl Lexer {
                         Token::Plus
                     }
                 }
+
                 Some('-') => {
                     self.advance();
                     if self.current() == Some('=') {
@@ -560,6 +632,8 @@ impl Lexer {
                     }
                 }
                 Some('~') => { self.advance(); Token::Tilde }
+                Some('#') => { self.advance(); Token::Hash }
+                Some('@') => { self.advance(); Token::At }
                 Some('"') => self.read_string(),
                 Some('\'') => self.read_char(),
                 Some(ch) if ch.is_ascii_digit() => self.read_number(),

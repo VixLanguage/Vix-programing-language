@@ -9,8 +9,8 @@ impl Codegen {
         body: &mut String,
         loc: SourceLocation,
     ) -> Result<(String, Type), ()> {
-        let (l_var, l_ty) = self.codegen_expr(left, body) .check_error();
-        let (r_var, r_ty) = self.codegen_expr(right, body) .check_error();
+        let (l_var, l_ty) = self.codegen_expr(left, body) ?;
+        let (r_var, r_ty) = self.codegen_expr(right, body) ?;
 
          
         let left_var = l_var.clone();
@@ -18,6 +18,24 @@ impl Codegen {
         let left_ty = l_ty.clone();
         let right_ty = r_ty.clone();
         
+        if (matches!(left_ty, Type::Str { .. }) || matches!(left_ty, Type::ConstStr)) && op == "+" {
+            self.ensure_zero_alloc_string_ops();
+            
+            let result = self.codegen_str_concat_zero_alloc(&left_var, &right_var, body);
+            return Ok((result, Type::Str { len_type: Box::new(Type::i64()) }));
+        }
+
+         
+        if matches!(left_ty, Type::Str { .. }) && matches!(right_ty, Type::Char { .. }) && op == "+" {
+            self.ensure_zero_alloc_string_ops();
+            
+            let char_tmp = self.fresh_var();
+            body.push_str(&format!("char {}[2] = {{ {}, '\\0' }};\n", char_tmp, right_var));
+            body.push_str(&format!("Slice_char {}_str = {{ .ptr = {}, .len = 1 }};\n", char_tmp, char_tmp));
+            
+            let result = self.codegen_str_concat_zero_alloc(&left_var, &format!("{}_str", char_tmp), body);
+            return Ok((result, Type::Str { len_type: Box::new(Type::i64()) }));
+        }
         if op == "+" && matches!(left_ty, Type::Str { .. }) && matches!(right_ty, Type::Char { .. }) {
             let char_tmp = self.fresh_var();
             body.push_str(&format!("char {}[2] = {{ {}, '\\0' }};\n", char_tmp, right_var));
@@ -42,9 +60,6 @@ impl Codegen {
         if (matches!(l_ty, Type::Str { .. }) || matches!(l_ty, Type::ConstStr)) && op == "+" {
             let mut l_ptr = l_var.clone();
             let mut r_ptr = r_var.clone();
-
-            self.ensure_string_typedef();
-            self.ensure_string_concat();
 
             if matches!(l_ty, Type::ConstStr) {
                 let tmp_l = self.fresh_var();
@@ -211,7 +226,7 @@ impl Codegen {
 
 
     pub fn codegen_unop(&mut self, op: &str, operand: &Expr, body: &mut String, loc: SourceLocation) -> Result<(String, Type), ()> {
-        let (var, ty) = self.codegen_expr(operand, body) .check_error();
+        let (var, ty) = self.codegen_expr(operand, body) ?;
         let tmp = self.fresh_var();
         
         match op {
@@ -302,7 +317,7 @@ impl Codegen {
     }
 
     pub fn codegen_typed_declaration(&mut self, name: &str, ty: &Type, value: &Expr, body: &mut String, loc: SourceLocation) -> Result<(), ()> {
-        let (val_var, val_ty) = self.codegen_expr(value, body) .check_error();
+        let (val_var, val_ty) = self.codegen_expr(value, body) ?;
         let c_name = format!("var_{}", name);
         
  
@@ -499,7 +514,11 @@ impl Codegen {
             "+" | "-" | "*" | "/" | "%" => {
                 if matches!((left, right), (Type::Int { .. }, Type::Int { .. }) | (Type::Float { .. }, Type::Float { .. })) {
                     true
-                } else { op == "+" && (matches!(left, Type::Str { .. } | Type::ConstStr) || matches!(right, Type::Str { .. } | Type::ConstStr)) }
+                } else if op == "+" && (matches!(left, Type::Str { .. } | Type::ConstStr) || matches!(right, Type::Str { .. } | Type::ConstStr)) {
+                    true
+                } else {
+                    false
+                }
             }
 
  
@@ -553,4 +572,5 @@ impl Codegen {
         
         Ok((val_var, val_ty))
     }
+
 }

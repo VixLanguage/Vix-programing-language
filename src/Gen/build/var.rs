@@ -75,13 +75,13 @@ impl Codegen {
         Ok(())
     }
 
-    pub fn codegen_match(&mut self, expr: &Expr, cases: &[MatchCase], default: &Option<Vec<Stmt>>, body: &mut String){
-        let (match_var, _match_ty) = self.codegen_expr(expr, body).check_error();
+    pub fn codegen_match(&mut self, expr: &Expr, cases: &[MatchCase], default: &Option<Vec<Stmt>>, body: &mut String) -> Result<(), ()> {
+        let (match_var, _match_ty) = self.codegen_expr(expr, body)?;
 
         let end_label = self.fresh_label();
 
         for case in cases {
-            let (case_val, _) = self.codegen_expr(&case.value, body).check_error();
+            let (case_val, _) = self.codegen_expr(&case.value, body)?;
             
             let _case_label = self.fresh_label();
             body.push_str(&format!("if ({} == {}) {{\n", match_var, case_val));
@@ -100,11 +100,13 @@ impl Codegen {
         }
 
         body.push_str(&format!("{}:\n", end_label));
+
+        Ok(())
     }
 
 
     pub fn codegen_not(&mut self, expr: &Expr, body: &mut String) -> Result<(String, Type), ()> {
-        let (var, ty) = self.codegen_expr(expr, body).check_error();
+        let (var, ty) = self.codegen_expr(expr, body)?;
         let tmp = self.fresh_var();
         
         match ty {
@@ -135,7 +137,7 @@ impl Codegen {
  
     pub fn codegen_return(&mut self, expr: &Option<Expr>, body: &mut String) -> Result<(), ()> {
         if let Some(e) = expr {
-            let (var, ty) = self.codegen_expr(e, body).check_error();
+            let (var, ty) = self.codegen_expr(e, body)?;
             
             if !matches!(ty, Type::Void) {
                 body.push_str(&format!("return {};\n", var));

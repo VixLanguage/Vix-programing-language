@@ -111,9 +111,6 @@ fn main() {
     }
 
     let mut source_files = Vec::new();
-    let src_path = fs::canonicalize(src_dir).unwrap_or(src_dir.to_path_buf());
-    println!("DEBUG: Searching for sources in: {:?}", src_path);
-
     if let Ok(entries) = fs::read_dir(src_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -156,6 +153,7 @@ fn main() {
     let footprint_packs = if !all_import_decls.is_empty() {
         match LibraryManager::process_imports_from_decls(&all_import_decls, Some(target)) {
             Ok(packs) => {
+                println!("   {} Processed {} libraries", "success:".green(), packs.len());
                 if let Err(e) = LibraryManager::validate_imports(&all_import_decls, &packs) {
                     eprintln!("{} Import validation failed: {:?}", "Error:".red(), e);
                     std::process::exit(1);
@@ -171,10 +169,22 @@ fn main() {
         Vec::new()
     };
 
-    let arch = ArchConfig::x86_64();
+    let mut all_library_includes = Vec::new();
+    let mut all_library_functions = Vec::new();
+    
+    for pack in &footprint_packs {
+        all_library_includes.extend(pack.includes.clone());
+        all_library_functions.extend(pack.function_signatures.clone());
+    }
 
-    let combined_source = String::new();
-    let main_filename = source_files.first().map(|p| p.display().to_string()).unwrap_or_else(|| "main.vix".to_string());
+    if debug_mode && !all_library_functions.is_empty() {
+        println!("   {} Extracted {} function signatures", "success:".bright_black(), all_library_functions.len());
+        for sig in &all_library_functions {
+            println!("      {} {}({}) -> {}", "success:".bright_black(), sig.name, 
+                sig.parameters.iter().map(|(n, t)| format!("{}: {}", n, t)).collect::<Vec<_>>().join(", "),
+                sig.return_type);
+        }
+    }
 
     let mut combined_source_code = String::new();
     for source_file in &source_files {
@@ -187,35 +197,27 @@ fn main() {
     let tokens = lexer.tokenize();
     let parser = Parser::new(tokens, combined_source_code.clone(), lexer.spans.clone());
     let (program, all_structs, all_enums, all_externs, _, _, _, all_impls, _, _, _) = parser.parse();
-    let all_functions = program.functions;
-    let all_constants = program.constants;
-    let combined_source = combined_source_code;
-    let all_modules = program.modules.clone();
 
-    if all_functions.is_empty() {
+    if program.functions.is_empty() {
         eprintln!("{} No functions found to compile", "Error:".red());
         std::process::exit(1);
     }
-    
-    let mut all_library_includes = Vec::new();
-    let mut all_library_functions = Vec::new();
-    
-    for pack in &footprint_packs {
-        all_library_includes.extend(pack.includes.clone());
-        all_library_functions.extend(pack.function_signatures.clone());
-    }
 
-    if debug_mode {
-        println!("   {} Extracted {} function signatures", "→".bright_black(), all_library_functions.len());
-        for sig in &all_library_functions {
-            println!("      {} {}({}) -> {}", "→".bright_black(), sig.name, 
-                sig.parameters.iter().map(|(n, t)| format!("{}: {}", n, t)).collect::<Vec<_>>().join(", "),
-                sig.return_type);
-        }
-    }
+    println!("   {} Found {} functions, {} structs, {} enums", 
+        "success:".green(), 
+        program.functions.len(),
+        all_structs.len(),
+        all_enums.len()
+    );
 
-    let mut codegen = Codegen::new(arch, combined_source, main_filename);
 
+    let arch = ArchConfig::x86_64();
+    let main_filename = source_files.first().map(|p| p.display().to_string()).unwrap_or_else(|| "main.vix".to_string());
+    let mut codegen = Codegen::new(arch, combined_source_code.clone(), main_filename);
+
+    codegen.set_import_context(&all_import_decls, &all_library_functions);
+
+     
     for func_sig in &all_library_functions {
         let params_str = if func_sig.parameters.is_empty() {
             "void".to_string()
@@ -226,21 +228,15 @@ fn main() {
                 .join(", ")
         };
         
-        let decl = format!("{} {}({});", 
-            func_sig.return_type, 
-            func_sig.name, 
-            params_str
-        );
+        let decl = format!("{} {}({});", func_sig.return_type, func_sig.name, params_str);
         codegen.ir.add_forward_decl(decl.clone());
         
         if debug_mode {
-            println!("   {} Added forward declaration: {}", "success:".bright_green(), decl);
+            println!("   {} Added forward declaration: {}", "success:".bright_black(), decl);
         }
     }
-    
-    let program = Program { functions: all_functions, constants: all_constants, modules: all_modules };
 
-    let c_code = match codegen.codegen_program_full(
+    let main_c_code = match codegen.codegen_program_full(
         &program, 
         &all_structs, 
         &all_enums, 
@@ -249,56 +245,95 @@ fn main() {
         &all_library_includes,
         &all_library_functions
     ) {
-        Ok(code) => code,
-        Err(_) => {
-            eprintln!("{} Code generation failed", "Error:".red());
+        Ok(code) => {
+            println!("   {} Main program C code generated", "success:".green());
+            
+             
+            if debug_mode {
+                if code.contains("vix_main") {
+                    println!("   {} vix_main function found in generated code", "success:".green());
+                } else {
+                    eprintln!("   {} vix_main function NOT found in generated code!", "warning".yellow());
+                }
+            }
+            
+            code
+        }
+        Err(e) => {
+            eprintln!("{} Main code generation failed: {:?}", "Error:".red(), e);
             std::process::exit(1);
         }
     };
 
     let linked_libs = codegen.get_linked_libraries();
     if debug_mode && !linked_libs.is_empty() {
-        println!("   {} Libraries to link: {:?}", "success:".bright_green(), linked_libs);
+        println!("   {} Libraries to link: {:?}", "success:".bright_black(), linked_libs);
+    }
+    
+     
+    if debug_mode {
+        use std::io::Write;
+        let debug_c_path = "release/bin/debug_output.c";
+        if let Ok(mut file) = fs::File::create(debug_c_path) {
+            let _ = file.write_all(main_c_code.as_bytes());
+            println!("   {} Generated C code saved to: {}", "success:".green(), debug_c_path);
+        }
     }
 
-    println!("   {} Compiling main program to object file", "success:".bright_green());
-    
-    let main_obj = Path::new("main.o");
-    match Clang::compile_to_object(&c_code, main_obj, Some(target)) {
-        Ok(_) => println!("   {} Main object file created: {}", "success:".green(), main_obj.display()),
+
+    let main_obj = Path::new("release/bin/main.o");
+    match Clang::compile_to_object(&main_c_code, main_obj, Some(target)) {
+        Ok(_) => println!("   {} Main object: {}", "success:".green(), main_obj.display()),
         Err(e) => {
-            eprintln!("{} Main compilation failed: {}", "Error:".red().bold(), e);
+            eprintln!("\n{} Main compilation failed!", "Error:".red().bold());
+            eprintln!("{}", e);
             std::process::exit(1);
         }
     }
 
+
     let mut object_files: Vec<&Path> = vec![main_obj];
+    
+     
     for pack in &footprint_packs {
         let lib_path = Path::new(&pack.source_library);
         if lib_path.exists() {
             object_files.push(lib_path);
-            if debug_mode {
-                println!("   {} Linking library: {}", "→".bright_black(), lib_path.display());
-            }
+            println!("   {} Linking library: {}", "success:".green(), lib_path.display());
         } else {
             eprintln!("{} Library object file not found: {}", "Warning:".yellow(), lib_path.display());
         }
     }
 
-    println!("   {} Linking executable with {} object file(s)", "→".bright_cyan(), object_files.len());
-    match Clang::link_executable(&object_files, output_name, linked_libs, Some(target)) {
+    println!("   {} Linking {} object files", "success:".green(), object_files.len());
+
+    match Clang::link_executable(&object_files, output_name, &linked_libs, Some(target)) {
         Ok(_) => {
+             
+            let _ = fs::remove_file("release/bin/main.o");
+            let _ = fs::remove_file("release/bin/output.c");
+            
+            println!("   {} Compilation Successful!", "success:".green().bold());
+            println!("   {} Executable: release/bin/{}", "success:".green(), output_name.bright_white().bold());
+            
             if should_run {
                 if target != current_os {
-                    println!("\n{} Cannot run executable compiled for {} on {}", "Warning:".yellow(), target.display_name(), current_os.display_name());
-                } else if let Err(e) = Clang::run_executable(output_name, Some(target)) {
-                    eprintln!("\n{} Runtime error: {}", "Error:".red(), e);
-                    std::process::exit(1);
+                    println!("\n{} Cannot run executable compiled for {} on {}", 
+                        "Warning:".yellow(), 
+                        target.display_name(), 
+                        current_os.display_name()
+                    );
+                } else {
+                    if let Err(e) = Clang::run_executable(output_name, Some(target)) {
+                        eprintln!("\n{} Runtime error: {}", "Error:".red(), e);
+                        std::process::exit(1);
+                    }
                 }
             }
         }
         Err(e) => {
-            eprintln!("{} Linking failed: {}", "Error:".red().bold(), e);
+            eprintln!("\n{} Linking failed!", "Error:".red().bold());
+            eprintln!("{}", e);
             std::process::exit(1);
         }
     }

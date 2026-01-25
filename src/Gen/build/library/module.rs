@@ -16,13 +16,13 @@ impl Codegen {
                  module, func, full_func_name);
         
          
-        let return_type = if let Some((params, ret_ty)) = self.user_functions.get(&full_func_name) {
+        let return_type = if let Some((_params, ret_ty)) = self.user_functions.get(&full_func_name) {
             println!("[DEBUG] Found user function: {} -> {:?}", full_func_name, ret_ty);
             ret_ty.clone()
         } else if let Some(ext_info) = self.extern_functions.get(&full_func_name) {
             println!("[DEBUG] Found extern function: {} -> {:?}", full_func_name, ext_info.return_type);
             ext_info.return_type.clone()
-        } else if let Some((params, ret_ty, _)) = self.module_functions.get(&(module.to_string(), func.to_string())) {
+        } else if let Some((_params, ret_ty, _)) = self.module_functions.get(&(module.to_string(), func.to_string())) {
             println!("[DEBUG] Found module function: {} -> {:?}", full_func_name, ret_ty);
             ret_ty.clone()
         } else {
@@ -69,7 +69,7 @@ impl Codegen {
         }
     }
     
-    pub fn codegen_module(&mut self, module: &Stmt) -> Result<(), ()> {
+    pub fn codegen_module(&mut self, module: &Stmt) {
         if let Stmt::ModuleDef { name, body, is_public: _ } = module {
             let init_func_name = format!("{}_init", name);
             self.module_init_functions.push(init_func_name.clone());
@@ -112,25 +112,22 @@ impl Codegen {
                         self.codegen_function(f, false);
                     }
                     Stmt::StructDef(s) => { 
-                        self.codegen_struct_definition(s).map_err(|_| ())?; 
+                        self.codegen_struct_definition(s).map_err(|_| ()).ok(); 
                     }
                     Stmt::EnumDef(e) => { 
-                        self.codegen_enum_definition(e).map_err(|_| ())?; 
+                        self.codegen_enum_definition(e).map_err(|_| ()).ok(); 
                     }
                     Stmt::ModuleDef { .. } => { 
-                        self.codegen_module(stmt)?; 
+                        self.codegen_module(stmt); 
                     }
                     _ => {
-                        self.codegen_stmt(stmt, &mut init_body)?;
+                        self.codegen_stmt(stmt, &mut init_body).ok();
                     }
                 }
             }
             
             let code = format!("void {}() {{\n{}\n}}\n", init_func_name, init_body);
             self.ir.functions.push_str(&code);
-            Ok(())
-        } else {
-            Err(())
         }
     }
 }

@@ -2,8 +2,6 @@ use crate::import::*;
 
 impl Codegen {
         pub fn codegen_struct_definition(&mut self, struct_def: &StructDef) -> Result<(), ()> {
-        self.ensure_string_typedef();
-        
         let loc = self.default_location();
 
         if self.structs.contains_key(&struct_def.name) {
@@ -40,7 +38,8 @@ impl Codegen {
                     }
                 );
             }
-
+            
+            self.ensure_type_defined(&field.ty);
             let c_type = field.ty.to_c_type(&self.arch, &mut self.type_registry);
 
             struct_code.push_str(&format!("    {} {};\n", c_type, field.name));
@@ -64,27 +63,28 @@ impl Codegen {
 
 
     pub fn codegen_typed_declaration_impl(&mut self, name: &str, ty: &Type, value: &Expr, body: &mut String, loc: SourceLocation, is_mutable: bool) -> Result<(), ()> {
-            if matches!(ty, Type::StdStr)
-                && let Expr::String(s) = value {
-                    let c_name = format!("var_{}", name);
-                    
-                    if s.is_empty() {
-                         
-                        self.ensure_malloc_helpers();
-                        self.ensure_std_str();
-                        body.push_str(&format!("String {} = String_new();\n", c_name));
-                        self.vars.insert(name.to_string(), (c_name, Type::StdStr));
-                        return Ok(());
-                    } else {
-                         
-                        self.ensure_malloc_helpers();
-                        self.ensure_std_str();
-                        let (val_var, _) = self.codegen_expr(value, body)?;
-                        body.push_str(&format!("String {} = String_from_str({});\n", c_name, val_var));
-                        self.vars.insert(name.to_string(), (c_name, Type::StdStr));
-                        return Ok(());
-                    }
-                }
+        if matches!(ty, Type::StdStr) {
+             let c_name = format!("var_{}", name);
+
+             let (val_var, val_ty) = self.codegen_expr(value, body)?;
+
+             if !self.types_compatible(ty, &val_ty) {
+                self.diagnostics.error(
+                    "TypeMismatch",
+                    &format!("Cannot initialize variable '{}' of type String with value of type {}", name, val_ty.name()),
+                    type_mismatch_error(&ty.name(), &val_ty.name(), loc.clone(), value.location())
+                );
+                return Err(());
+             }
+
+             body.push_str(&format!("String {} = {};\n", c_name, val_var));
+             
+             self.vars.insert(name.to_string(), (c_name, Type::StdStr));
+             return Ok(());
+        }
+    
+     
+
 
         
         if let Type::Union { variants } = ty {
@@ -131,7 +131,7 @@ impl Codegen {
             }
         }
         
-        let (val_var, val_ty) = self.codegen_expr(value, body).check_error();
+        let (val_var, val_ty) = self.codegen_expr(value, body)?;
         
         let effective_ty = if matches!(ty, Type::Auto) {
             val_ty.clone()
@@ -196,7 +196,7 @@ impl Codegen {
                 }
                 
                 
-                let elem_c_type = element.to_c_type(&self.arch, &mut self.type_registry);
+                let _elem_c_type = element.to_c_type(&self.arch, &mut self.type_registry);
                 let slice_type = self.type_registry.generate_slices(element, &self.arch);
                 
                 
@@ -305,39 +305,20 @@ impl Codegen {
                 body.push_str(&format!("{} {} = {};\n", decl_type, c_name, val_var));
             }
             Type::StdStr => {
-                let (val_var, val_ty) = self.codegen_expr(value, body)?;
-                
-                self.ensure_malloc_helpers();
-                self.ensure_std_str();
-                
-                let c_name = format!("var_{}", name);
-                
-                match val_ty {
-                    Type::Str { .. } | Type::ConstStr => {
-                        body.push_str(&format!("String {} = String_from_str({});\n", c_name, val_var));
-                    }
-
-                    Type::StdStr => {
-                        body.push_str(&format!("String {} = {};\n", c_name, val_var));
-                    }
-
-                    _ => {
-                        self.diagnostics.error(
-                            "TypeMismatch",
-                            &format!("Cannot initialize String with type {}", val_ty.name()),
-                            ErrorContext {
-                                primary_location: loc.clone(),
-                                secondary_locations: vec![],
-                                help_message: Some("String can only be initialized from str or String".to_string()),
-                                suggestions: vec![],
-                            }
-                        );
-                        return Err(());
-                    }
-                }
-                
-                self.vars.insert(name.to_string(), (c_name, Type::StdStr));
+                 self.diagnostics.error(
+                     "UnsupportedType",
+                     "String type not supported in No-OS mode. Use 'str' (Slice) instead.",
+                     ErrorContext {
+                         primary_location: loc,
+                         secondary_locations: vec![],
+                         help_message: Some("The 'String' type requires an owner/allocator which is disabled.".to_string()),
+                         suggestions: vec!["Change type to 'str'".to_string()],
+                     }
+                 );
+                 return Err(());
             }
+
+
             _ => {
                 if !self.types_compatible(ty, &val_ty) {
                     let value_loc = value.location();
@@ -429,8 +410,6 @@ impl Codegen {
         body: &[(String, Expr)],
         only_signatures: bool
     ) -> Result<(), ()> {
-        self.ensure_string_typedef();
-        
         let mut func_code = String::new();
         let func_name = format!("{}_new", struct_name);
         
@@ -499,8 +478,6 @@ impl Codegen {
     pub fn codegen_impl_method(&mut self, method: &ImplMethod, struct_name: &str, only_signatures: bool) {
         self.vars.clear();
         self.var_count = 0;
-        self.ensure_string_typedef();
-        
 
         for (param_name, param_type, _) in &method.params {
             if matches!(param_type, Type::Void) {
@@ -752,12 +729,12 @@ impl Codegen {
         else_body: &Option<Vec<Stmt>>,
         body: &mut String,
     ) -> Result<(), ()> {
-        let (cond_var, _cond_ty) = self.codegen_expr(cond, body) .check_error();
+        let (cond_var, _cond_ty) = self.codegen_expr(cond, body) ?;
 
         body.push_str(&format!("if ({}) {{\n", cond_var));
 
         for stmt in then_body {
-            self.codegen_stmt(stmt, body);
+            let _ = self.codegen_stmt(stmt, body);
         }
 
         body.push_str("}\n");
@@ -791,7 +768,7 @@ impl Codegen {
                      
                     let reg_fields = fields.iter().map(|f| (f.name.clone(), f.ty.clone())).collect();
                     self.type_registry.register_struct(payload_name.clone(), reg_fields);
-                    self.codegen_struct_definition(&struct_def);
+                    let _ = self.codegen_struct_definition(&struct_def);
 
                      variants.push((name.clone(), Some(Type::Struct { name: payload_name })));
                 }
@@ -878,7 +855,7 @@ impl Codegen {
         Ok(()) 
     }
 
-        pub fn codegen_for(&mut self, var: &str, iter: &Expr, loop_body: &[Stmt], body: &mut String, loc: SourceLocation) -> Result<(), ()> {
+        pub fn codegen_for(&mut self, var: &str, iter: &Expr, loop_body: &[Stmt], body: &mut String, _loc: SourceLocation) -> Result<(), ()> {
         let (iter_var, iter_ty) = self.codegen_expr(iter, body)?;
         println!("[DEBUG] codegen_for: var={}, iter_ty={:?}", var, iter_ty);
         
@@ -927,8 +904,8 @@ impl Codegen {
     }
 
 
-        pub fn codegen_tuple_unpack(&mut self, names: &[String], value: &Expr, body: &mut String, loc: SourceLocation) -> Result<(), ()> {
-            let (val_var, val_ty) = self.codegen_expr(value, body).check_error();
+        pub fn codegen_tuple_unpack(&mut self, names: &[String], value: &Expr, body: &mut String, _loc: SourceLocation) -> Result<(), ()> {
+            let (val_var, val_ty) = self.codegen_expr(value, body)?;
             
             match val_ty {
                 Type::Tuple { fields } => {
@@ -1019,7 +996,7 @@ impl Codegen {
         }
     }
 
-        fn codegen_if_let_ok_pattern(
+    fn codegen_if_let_ok_pattern(
         &mut self,
         pattern_args: &[Expr],
         val_var: &str,

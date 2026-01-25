@@ -1,347 +1,217 @@
 use crate::import::*;
 
 impl Codegen {
-    pub fn ensure_string_concat(&mut self) {
-        if self.ir.functions.contains("vix_string_concat") {
-            return;
-        }
-        
-        let string_type = self.type_registry.generate_slices(&Type::char8(), &self.arch);
-        
-        let helper = format!(r#"
-    static {ST} vix_string_concat({ST} s1, {ST} s2) {{
-        {ST} res;
-        res.len = s1.len + s2.len;
-        res.ptr = (char*)malloc(res.len + 1);
-        if (res.ptr) {{
-            memcpy(res.ptr, s1.ptr, s1.len);
-            memcpy(res.ptr + s1.len, s2.ptr, s2.len);
-            res.ptr[res.len] = '\0';
-        }}
-        return res;
-    }}
-    "#, ST = string_type);
-
-        self.ir.functions.push_str(&helper);
-    }
-
-    pub fn ensure_repeat_helper(&mut self) {
-        if self.ir.functions.contains("vix_repeat") {
-            return;
-        }
-        
-        let string_type = self.type_registry.generate_slices(&Type::char8(), &self.arch);
-        
-        let helper = format!(r#"
-    static {ST} vix_repeat({ST} s, int64_t count) {{
-        {ST} res;
-        if (count <= 0) {{ res.ptr = ""; res.len = 0; return res; }}
-        res.len = s.len * count;
-        res.ptr = (char*)malloc(res.len + 1);
-        if (res.ptr) {{
-            for (int64_t i = 0; i < count; i++) {{
-                memcpy(res.ptr + (i * s.len), s.ptr, s.len);
-            }}
-            res.ptr[res.len] = '\0';
-        }}
-        return res;
-    }}
-    "#, ST = string_type);
-
-        self.ir.functions.push_str(&helper);
-    }
-
-    pub fn ensure_to_string_helpers(&mut self) {
-        if self.ir.functions.contains("vix_int_to_str") {
-            return;
-        }
-        
-        let string_type = self.type_registry.generate_slices(&Type::char8(), &self.arch);
-        
-        let helper = format!(r#"
-static {ST} vix_int_to_str(int64_t value) {{
-    static char buf[32];
-    int len = snprintf(buf, sizeof(buf), "%lld", (long long)value);
-    return ({ST}){{ .ptr = buf, .len = (size_t)len }};
-}}
-
-static {ST} vix_float_to_str(double value) {{
-    static char buf[64];
-    int len = snprintf(buf, sizeof(buf), "%g", value);
-    return ({ST}){{ .ptr = buf, .len = (size_t)len }};
-}}
-
-static {ST} vix_bool_to_str(bool value) {{
-    return value ? ({ST}){{ .ptr = "true", .len = 4 }} : ({ST}){{ .ptr = "false", .len = 5 }};
-}}
-"#, ST = string_type);
-
-        self.ir.functions.push_str(&helper);
-    }
-
-    pub fn ensure_malloc_helpers(&mut self) {
-        if self.ir.functions.contains("vix_malloc") {
+    pub fn ensure_unified_push(&mut self) {
+        if self.ir.functions.contains("vix_push") {
             return;
         }
         
         let helper = r#"
-static inline void* vix_malloc(size_t size) {
-    if (size == 0) return NULL;
-    void* ptr = malloc(size);
-    if (!ptr) {
-        fprintf(stderr, "allocation failed: tried to allocate %zu bytes\n", size);
-        abort();
-    }
-    return ptr;
-}
+#define vix_push(arr, elem) _Generic((arr), \
+    Slice_int8: vix_push_impl(arr, &(elem), sizeof(int8_t)), \
+    Slice_int16: vix_push_impl(arr, &(elem), sizeof(int16_t)), \
+    Slice_int32: vix_push_impl(arr, &(elem), sizeof(int32_t)), \
+    Slice_int64: vix_push_impl(arr, &(elem), sizeof(int64_t)), \
+    Slice_uint8: vix_push_impl(arr, &(elem), sizeof(uint8_t)), \
+    Slice_uint16: vix_push_impl(arr, &(elem), sizeof(uint16_t)), \
+    Slice_uint32: vix_push_impl(arr, &(elem), sizeof(uint32_t)), \
+    Slice_uint64: vix_push_impl(arr, &(elem), sizeof(uint64_t)), \
+    Slice_float: vix_push_impl(arr, &(elem), sizeof(float)), \
+    Slice_double: vix_push_impl(arr, &(elem), sizeof(double)), \
+    Slice_char: vix_push_impl(arr, &(elem), sizeof(char)), \
+    default: vix_push_impl(arr, &(elem), sizeof(elem)) \
+)
 
-static inline void* vix_realloc(void* old_ptr, size_t new_size) {
-    if (new_size == 0) {
-        free(old_ptr);
-        return NULL;
-    }
-    void* ptr = realloc(old_ptr, new_size);
-    if (!ptr) {
-        fprintf(stderr, "reallocation failed: tried to reallocate to %zu bytes\n", new_size);
-        abort();
-    }
-    return ptr;
-}
+static inline void* vix_push_impl(void* arr_ptr, const void* elem_ptr, size_t elem_size) {
+    typedef struct {
+        void* ptr;
+        size_t len;
+    } GenericSlice;
 
-static inline void* vix_calloc(size_t count, size_t size) {
-    if (count == 0 || size == 0) return NULL;
-    void* ptr = calloc(count, size);
-    if (!ptr) {
-        fprintf(stderr, "allocation failed: tried to allocate %zu * %zu bytes\n", count, size);
-        abort();
+    GenericSlice* arr = (GenericSlice*)arr_ptr;
+    size_t new_len = arr->len + 1;
+
+    void* new_ptr = vix_malloc(new_len * elem_size);
+
+    if (arr->len > 0) {
+        memcpy(new_ptr, arr->ptr, arr->len * elem_size);
     }
-    return ptr;
+
+    memcpy((char*)new_ptr + (arr->len * elem_size), elem_ptr, elem_size);
+
+    arr->ptr = new_ptr;
+    arr->len = new_len;
+    
+    return arr_ptr;
 }
 "#;
-
+        
         self.ir.functions.push_str(helper);
     }
 
-    pub fn ensure_std_str(&mut self) {
-        if self.ir.type_definitions.contains("String") {
+    pub fn ensure_unified_extend(&mut self) {
+        if self.ir.functions.contains("vix_extend") {
             return;
         }
         
-        let typedef = r#"
-typedef struct {
-    char* ptr;
-    size_t len;
-    size_t capacity;
-} String;
+        let helper = r#"
+#define vix_extend(dest, src) _Generic((dest), \
+    Slice_int8: vix_extend_impl(&(dest), &(src), sizeof(int8_t)), \
+    Slice_int16: vix_extend_impl(&(dest), &(src), sizeof(int16_t)), \
+    Slice_int32: vix_extend_impl(&(dest), &(src), sizeof(int32_t)), \
+    Slice_int64: vix_extend_impl(&(dest), &(src), sizeof(int64_t)), \
+    Slice_uint8: vix_extend_impl(&(dest), &(src), sizeof(uint8_t)), \
+    Slice_uint16: vix_extend_impl(&(dest), &(src), sizeof(uint16_t)), \
+    Slice_uint32: vix_extend_impl(&(dest), &(src), sizeof(uint32_t)), \
+    Slice_uint64: vix_extend_impl(&(dest), &(src), sizeof(uint64_t)), \
+    Slice_float: vix_extend_impl(&(dest), &(src), sizeof(float)), \
+    Slice_double: vix_extend_impl(&(dest), &(src), sizeof(double)), \
+    Slice_char: vix_extend_impl(&(dest), &(src), sizeof(char)), \
+    default: vix_extend_impl(&(dest), &(src), sizeof(*(dest).ptr)) \
+)
+
+static inline void vix_extend_impl(void* dest_ptr, const void* src_ptr, size_t elem_size) {
+    typedef struct {
+        void* ptr;
+        size_t len;
+    } GenericSlice;
+    
+    GenericSlice* dest = (GenericSlice*)dest_ptr;
+    const GenericSlice* src = (const GenericSlice*)src_ptr;
+
+    if (src->len == 0) return;
+
+    size_t new_len = dest->len + src->len;
+
+    void* new_ptr = vix_malloc(new_len * elem_size);
+
+    if (dest->len > 0) {
+        memcpy(new_ptr, dest->ptr, dest->len * elem_size);
+    }
+
+    memcpy((char*)new_ptr + (dest->len * elem_size), src->ptr, src->len * elem_size);
+
+    dest->ptr = new_ptr;
+    dest->len = new_len;
+}
 "#;
         
-        self.ir.type_definitions.push_str(typedef);
-        self.ir.type_definitions.push('\n');
-        
-         
-        let helpers = r#"
-static inline String String_new(void) {
-    String s;
-    s.ptr = NULL;
-    s.len = 0;
-    s.capacity = 0;
-    return s;
-}
-
-static inline String String_with_capacity(size_t capacity) {
-    String s;
-    if (capacity == 0) {
-        s.ptr = NULL;
-        s.len = 0;
-        s.capacity = 0;
-    } else {
-        s.ptr = (char*)vix_malloc(capacity);
-        s.len = 0;
-        s.capacity = capacity;
+        self.ir.functions.push_str(helper);
     }
-    return s;
-}
-
-static inline String String_from(const char* cstr) {
-    size_t len = strlen(cstr);
-    String s;
-    s.len = len;
-    s.capacity = len + 1;
-    s.ptr = (char*)vix_malloc(s.capacity);
-    memcpy(s.ptr, cstr, len);
-    s.ptr[len] = '\0';
-    return s;
-}
-
-static inline String String_from_str(Slice_char source) {
-    String s;
-    s.len = source.len;
-    s.capacity = source.len + 1;
-    s.ptr = (char*)vix_malloc(s.capacity);
-    memcpy(s.ptr, source.ptr, source.len);
-    s.ptr[source.len] = '\0';
-    return s;
-}
-
-static inline void String_drop(String* s) {
-    if (s->ptr != NULL) {
-        free(s->ptr);
-    }
-    s->ptr = NULL;
-    s->len = 0;
-    s->capacity = 0;
-}
-
-static inline void String_push(String* s, char c) {
-    if (s->len + 2 > s->capacity) {
-        size_t new_cap = s->capacity == 0 ? 8 : s->capacity * 2;
-        s->ptr = (char*)vix_realloc(s->ptr, new_cap);
-        s->capacity = new_cap;
-    }
-    s->ptr[s->len] = c;
-    s->len++;
-    s->ptr[s->len] = '\0';
-}
-
-static inline void String_push_str(String* dest, Slice_char src) {
-    if (src.len == 0) return;
     
-    size_t required = dest->len + src.len + 1;
-    if (required > dest->capacity) {
-        size_t new_cap = dest->capacity == 0 ? 8 : dest->capacity;
-        while (new_cap < required) {
-            new_cap *= 2;
+    pub fn ensure_zero_alloc_string_ops(&mut self) {
+        if self.ir.functions.contains("vix_str_concat_view") {
+            return;
         }
-        dest->ptr = (char*)vix_realloc(dest->ptr, new_cap);
-        dest->capacity = new_cap;
-    }
+        
+        let helper = r#"
+static Slice_char vix_str_concat_view(Slice_char s1, Slice_char s2) {
+    static __thread char buffer[8192];
+    static __thread size_t offset = 0;
     
-    memcpy(dest->ptr + dest->len, src.ptr, src.len);
-    dest->len += src.len;
-    dest->ptr[dest->len] = '\0';
-}
+    size_t total = s1.len + s2.len;
 
-static inline Slice_char String_as_str(const String* s) {
+    if (offset + total >= sizeof(buffer)) {
+        offset = 0;
+    }
+
+    memcpy(buffer + offset, s1.ptr, s1.len);
+    memcpy(buffer + offset + s1.len, s2.ptr, s2.len);
+
     Slice_char result;
-    result.ptr = s->ptr;
-    result.len = s->len;
+    result.ptr = buffer + offset;
+    result.len = total;
+
+    offset += total;
+
+    return result;
+}
+
+static inline void vix_str_append_inplace(Slice_char* dest, Slice_char src) {
+
+    static __thread char extend_buf[8192];
+    static __thread size_t extend_offset = 0;
+    
+    size_t total = dest->len + src.len;
+    
+    if (extend_offset + total >= sizeof(extend_buf)) {
+        extend_offset = 0;
+    }
+
+    memcpy(extend_buf + extend_offset, dest->ptr, dest->len);
+    memcpy(extend_buf + extend_offset + dest->len, src.ptr, src.len);
+    
+    dest->ptr = extend_buf + extend_offset;
+    dest->len = total;
+    
+    extend_offset += total;
+}
+
+typedef struct {
+    char* base;
+    size_t offset;
+    size_t capacity;
+} Arena;
+
+static Arena global_arena = {0};
+
+static inline void vix_arena_init(size_t capacity) {
+    if (!global_arena.base) {
+        global_arena.base = (char*)vix_malloc(capacity);
+        global_arena.capacity = capacity;
+        global_arena.offset = 0;
+    }
+}
+
+static inline char* vix_arena_alloc(size_t size) {
+    if (global_arena.offset + size > global_arena.capacity) {
+        global_arena.offset = 0;
+    }
+    
+    char* ptr = global_arena.base + global_arena.offset;
+    global_arena.offset += size;
+    return ptr;
+}
+
+static Slice_char vix_str_concat_arena(Slice_char s1, Slice_char s2) {
+    size_t total = s1.len + s2.len;
+    char* ptr = vix_arena_alloc(total);
+    
+    memcpy(ptr, s1.ptr, s1.len);
+    memcpy(ptr + s1.len, s2.ptr, s2.len);
+    
+    Slice_char result;
+    result.ptr = ptr;
+    result.len = total;
     return result;
 }
 "#;
         
-        self.ir.functions.push_str(helpers);
-    }
-    
-    fn codegen_panic(&mut self, message: &str, location: Option<&str>) -> String {
-        let mut code = String::new();
-        
-        let _loc = location.unwrap_or("unknown");
-        code.push_str(&format!("fprintf(stderr, \"panic: {}\\n\");\n", message.replace("\"", "\\\"")));
-        code.push_str("abort();\n");
-
-        code
+        self.ir.functions.push_str(helper);
     }
 
-    pub fn try_auto_convert(&self, from: &Type, to: &Type) -> bool {
-        match (from, to) {
-            (Type::StdStr, Type::Str { .. }) => true,
-            (Type::Str { .. }, Type::StdStr) => false,
-            _ if self.types_compatible(from, to) => true,
-            
-            _ => false,
-        }
+    pub fn codegen_push_unified(&mut self, arr: &str, elem: &str, body: &mut String) {
+        self.ensure_unified_push();
+        body.push_str(&format!("vix_push({}, {});\n", arr, elem));
     }
-
-
-    pub fn auto_convert(
-        &mut self,
-        var: String,
-        from_ty: &Type,
-        to_ty: &Type,
-        body: &mut String
-    ) -> Result<String, ()> {
-        if self.types_compatible(from_ty, to_ty) {
-            return Ok(var);
-        }
-        
-        match (from_ty, to_ty) {
-             
-            (Type::StdStr, Type::Str { .. }) => {
-                let tmp = self.fresh_var();
-                body.push_str(&format!("Slice_char {} = String_as_str(&{});\n", tmp, var));
-                Ok(tmp)
-            }
-            
-            _ => {
-                Err(())
-            }
-        }
+    
+    pub fn codegen_extend_unified(&mut self, dest: &str, src: &str, body: &mut String) {
+        self.ensure_unified_extend();
+        body.push_str(&format!("vix_extend({}, {});\n", dest, src));
     }
-
-     
-     
-    pub fn ensure_array_extend(&mut self, elem_type: &Type) {
-        let elem_c_type = elem_type.to_c_type(&self.arch, &mut self.type_registry);
-        let array_type = Type::Array { 
-            element: Box::new(elem_type.clone()), 
-            size: None 
-        }.to_c_type(&self.arch, &mut self.type_registry);
-        
-        let func_name = format!("vix_array_extend_{}", elem_type.name().replace("::", "_"));
-        
-        if self.ir.functions.contains(&func_name) {
-            return;
-        }
-        
-         
-        let helper = format!(r#"
-static inline {ARRAY_TYPE} vix_array_extend_{SUFFIX}({ARRAY_TYPE} dest, {ARRAY_TYPE} src) {{
-    size_t new_len = dest.len + src.len;
-    {ARRAY_TYPE} result;
-    result.len = new_len;
     
-     
-    result.ptr = ({ELEM_TYPE} *)malloc(new_len * sizeof({ELEM_TYPE}));
-    if (!result.ptr && new_len > 0) {{
-        result.len = 0;
-        return result;
-    }}
-    
-     
-    if (dest.len > 0) {{
-        memcpy(result.ptr, dest.ptr, dest.len * sizeof({ELEM_TYPE}));
-    }}
-    if (src.len > 0) {{
-        memcpy(result.ptr + dest.len, src.ptr, src.len * sizeof({ELEM_TYPE}));
-    }}
-    
-     
-    
-    return result;
-}}
-"#,
-            ARRAY_TYPE = array_type,
-            SUFFIX = elem_type.name().replace("::", "_"),
-            ELEM_TYPE = elem_c_type
-        );
+    pub fn codegen_str_concat_zero_alloc(&mut self, s1: &str, s2: &str, body: &mut String) -> String {
+        self.ensure_zero_alloc_string_ops();
         
-        self.ir.functions.push_str(&helper);
+        body.push_str("vix_arena_init(1048576);\n");
+        
+        let tmp = self.fresh_var();
+        body.push_str(&format!("Slice_char {} = vix_str_concat_arena({}, {});\n", tmp, s1, s2));
+        tmp
     }
-
-    pub fn codegen_extend(
-        &mut self,
-        dest_var: &str,
-        src_var: &str,
-        elem_type: &Type,
-        body: &mut String
-    ) {
-        self.ensure_array_extend(elem_type);
-        
-        let func_name = format!("vix_array_extend_{}", elem_type.name().replace("::", "_"));
-        
-        body.push_str(&format!(
-            "{} = {}({}, {});\n",
-            dest_var, func_name, dest_var, src_var
-        ));
+    
+    pub fn codegen_str_append_zero_alloc(&mut self, dest: &str, src: &str, body: &mut String) {
+        self.ensure_zero_alloc_string_ops();
+        body.push_str(&format!("vix_str_append_inplace(&{}, {});\n", dest, src));
     }
 }

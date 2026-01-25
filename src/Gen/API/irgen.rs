@@ -14,75 +14,79 @@ impl IR {
             added_function_decls: HashSet::new(),
         }
     }
-    
+
     pub fn finalize(self) -> String {
+        self.finalize_internal(true)
+    }
+
+    pub fn finalize_library(self) -> String {
+        self.finalize_internal(false)
+    }
+    
+    fn finalize_internal(self, include_main: bool) -> String {
         let mut output = String::new();
 
-         
+
         output.push_str("#include <stdio.h>\n");
         output.push_str("#include <stdlib.h>\n");
         output.push_str("#include <stdint.h>\n");
         output.push_str("#include <stdbool.h>\n");
         output.push_str("#include <string.h>\n");
         output.push_str("#include <time.h>\n\n");
-        
-         
+
         if !self.headers.is_empty() {
             output.push_str(&self.headers);
             output.push('\n');
         }
-        
-         
+
         if !self.type_definitions.is_empty() {
             output.push_str(&self.type_definitions);
             output.push('\n');
         }
-        
-         
+
         if !self.forward_decls.is_empty() {
+            println!("External contains so many stupid things like: {}", &self.forward_decls);
             output.push_str(&self.forward_decls);
             output.push('\n');
         }
-
-         
+    
         if !self.function_decls.is_empty() {
             output.push_str(&self.function_decls);
             output.push('\n');
         }
 
-         
         if !self.helper_functions.is_empty() {
             output.push_str(&self.helper_functions);
             output.push('\n');
         }
 
-         
         if !self.functions.is_empty() {
             output.push_str(&self.functions);
             output.push('\n');
         }
 
-         
-        output.push_str("int main() {\n");
-        output.push_str("    vix_main();\n");
-        output.push_str("    return 0;\n");
-        output.push_str("}\n");
+        if include_main {
+            output.push_str("int main() {\n");
+            output.push_str("    vix_main();\n");
+            output.push_str("    return 0;\n");
+            output.push_str("}\n");
+        }
 
         output
     }
 
     pub fn add_forward_decl(&mut self, decl: String) {
-        if !self.forward_decls.contains(&decl) {
-            self.forward_decls.push_str(&decl);
-            if !decl.ends_with('\n') {
+        let normalized = decl.trim().to_string();
+
+        if !self.forward_decls.contains(&normalized) {
+            self.forward_decls.push_str(&normalized);
+            if !normalized.ends_with('\n') {
                 self.forward_decls.push('\n');
             }
         }
     }
     
     pub fn add_type_definition(&mut self, typedef: String) {
-         
-         
         let type_key = if let Some(name_start) = typedef.rfind("} ") {
             if let Some(name_end) = typedef[name_start + 2..].find(';') {
                 typedef[name_start + 2..name_start + 2 + name_end].trim().to_string()
@@ -90,7 +94,6 @@ impl IR {
                 typedef.clone()
             }
         } else if typedef.starts_with("typedef ") {
-             
             typedef.trim_end_matches(';')
                 .split_whitespace()
                 .last()
@@ -100,7 +103,6 @@ impl IR {
             typedef.clone()
         };
 
-         
         if self.added_typedefs.insert(type_key) {
             self.type_definitions.push_str(&typedef);
             if !typedef.ends_with('\n') {

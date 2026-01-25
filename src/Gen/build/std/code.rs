@@ -49,13 +49,13 @@ int x_random(int max) {
     }
 
     fn codegen_range(&mut self, args: &[Expr], body: &mut String) -> Result<(String, Type), ()> {
-        let (val, _) = self.codegen_expr(&args[0], body).check_error();
+        let (val, _) = self.codegen_expr(&args[0], body)?;
         Ok((val, Type::i32()))
     }
 
     fn codegen_random(&mut self, args: &[Expr], body: &mut String) -> Result<(String, Type), ()> {
         let max_var = if !args.is_empty() {
-            let (v, _) = self.codegen_expr(&args[0], body).check_error();
+            let (v, _) = self.codegen_expr(&args[0], body)?;
             v
         } else {
             "100".to_string()
@@ -97,7 +97,7 @@ int x_random(int max) {
         };
 
         for (i, arg) in args.iter().enumerate() {
-            let (mut var, ty) = self.codegen_expr(arg, body).check_error();
+            let (mut var, ty) = self.codegen_expr(arg, body)?;
 
             if let Some(params) = &param_types
                 && let Some(param_ty) = params.get(i)
