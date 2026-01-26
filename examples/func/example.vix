@@ -1,4 +1,4 @@
-import math from "src/math.vix"
+import math from "src/main.vix"
 
 // Function main. First function be called in your program
 func main():
